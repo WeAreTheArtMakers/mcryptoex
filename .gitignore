@@ -15,6 +15,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+apps/api/generated/
 
 # Docker
 *.log
@@ -23,3 +24,6 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# Local secrets (never commit)
+.local-secrets/

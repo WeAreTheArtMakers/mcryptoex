@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package mcryptoex.notes;
+
+import "google/protobuf/timestamp.proto";
+
+message DexTxRaw {
+  string note_id = 1;
+  string correlation_id = 2;
+  uint32 chain_id = 3;
+  string tx_hash = 4;
+  string action = 5;
+  string user_address = 6;
+  string pool_address = 7;
+  string token_in = 8;
+  string token_out = 9;
+  string amount_in = 10;
+  string amount_out = 11;
+  string fee_usd = 12;
+  string gas_used = 13;
+  string gas_cost_usd = 14;
+  string protocol_revenue_usd = 15;
+  uint64 block_number = 16;
+  google.protobuf.Timestamp occurred_at = 17;
+  string source = 18;
+}

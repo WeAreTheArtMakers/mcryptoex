@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package mcryptoex.notes;
+
+import "google/protobuf/timestamp.proto";
+
+message DexTxValid {
+  string tx_id = 1;
+  string note_id = 2;
+  string correlation_id = 3;
+  uint32 chain_id = 4;
+  string tx_hash = 5;
+  string action = 6;
+  string user_address = 7;
+  string pool_address = 8;
+  string token_in = 9;
+  string token_out = 10;
+  string amount_in = 11;
+  string amount_out = 12;
+  string fee_usd = 13;
+  string gas_used = 14;
+  string gas_cost_usd = 15;
+  string protocol_revenue_usd = 16;
+  uint64 block_number = 17;
+  google.protobuf.Timestamp occurred_at = 18;
+  string validation_version = 19;
+}

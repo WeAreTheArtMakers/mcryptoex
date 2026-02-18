@@ -1,4 +1,4 @@
-.PHONY: dev down ps logs
+.PHONY: dev down ps logs phase3-check
 
 dev:
 	docker compose up --build
@@ -11,3 +11,6 @@ ps:
 
 logs:
 	docker compose logs -f
+
+phase3-check:
+	python3 scripts/e2e_pipeline_check.py

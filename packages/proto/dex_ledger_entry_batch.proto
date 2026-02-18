@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package mcryptoex.notes;
+
+import "google/protobuf/timestamp.proto";
+
+message DexLedgerEntry {
+  string tx_id = 1;
+  string note_id = 2;
+  uint32 chain_id = 3;
+  string tx_hash = 4;
+  string account_id = 5;
+  string side = 6;
+  string asset = 7;
+  string amount = 8;
+  string entry_type = 9;
+  string fee_usd = 10;
+  string gas_cost_usd = 11;
+  string protocol_revenue_usd = 12;
+  string pool_address = 13;
+  google.protobuf.Timestamp occurred_at = 14;
+}
+
+message DexLedgerEntryBatch {
+  string batch_id = 1;
+  string tx_id = 2;
+  string note_id = 3;
+  string correlation_id = 4;
+  uint32 chain_id = 5;
+  string tx_hash = 6;
+  google.protobuf.Timestamp created_at = 7;
+  repeated DexLedgerEntry entries = 8;
+}

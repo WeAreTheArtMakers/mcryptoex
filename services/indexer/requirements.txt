@@ -1,0 +1,5 @@
+confluent-kafka==2.11.1
+web3==7.13.0
+eth-abi==5.2.0
+protobuf==6.32.0
+grpcio-tools==1.74.0

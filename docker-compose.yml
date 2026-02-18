@@ -130,6 +130,15 @@ services:
     environment:
       SERVICE_NAME: tempo-api
       CORS_ORIGINS: ${CORS_ORIGINS}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USERNAME: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DB}
+      DEX_TX_RAW_TOPIC: dex_tx_raw
+      PYTHONUNBUFFERED: '1'
     ports:
       - '${API_PORT}:8000'
 
@@ -144,6 +153,17 @@ services:
         condition: service_completed_successfully
     environment:
       SERVICE_NAME: indexer
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      DEX_TX_RAW_TOPIC: dex_tx_raw
+      INDEXER_CHAIN_ID: 31337
+      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-}
+      INDEXER_PAIR_ADDRESSES: ${INDEXER_PAIR_ADDRESSES:-}
+      INDEXER_STABILIZER_ADDRESSES: ${INDEXER_STABILIZER_ADDRESSES:-}
+      INDEXER_POLL_INTERVAL_SECONDS: 5
+      INDEXER_START_BLOCK: ${INDEXER_START_BLOCK:-latest}
+      INDEXER_ENABLE_SIMULATION: ${INDEXER_ENABLE_SIMULATION:-false}
+      INDEXER_SIMULATION_INTERVAL_SECONDS: 25
+      PYTHONUNBUFFERED: '1'
 
   validator:
     build:
@@ -156,6 +176,12 @@ services:
         condition: service_completed_successfully
     environment:
       SERVICE_NAME: validator
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      DEX_TX_RAW_TOPIC: dex_tx_raw
+      DEX_TX_VALID_TOPIC: dex_tx_valid
+      DEX_DLQ_TOPIC: dex_dlq
+      VALIDATOR_GROUP_ID: mcryptoex-validator-v1
+      PYTHONUNBUFFERED: '1'
 
   ledger-writer:
     build:
@@ -172,6 +198,18 @@ services:
         condition: service_healthy
     environment:
       SERVICE_NAME: ledger-writer
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      DEX_TX_VALID_TOPIC: dex_tx_valid
+      DEX_LEDGER_ENTRIES_TOPIC: dex_ledger_entries
+      DEX_OUTBOX_TOPIC: dex_outbox
+      LEDGER_WRITER_GROUP_ID: mcryptoex-ledger-writer-v1
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DB}
+      PYTHONUNBUFFERED: '1'
 
   web:
     build:
