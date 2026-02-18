@@ -9,10 +9,22 @@ type TokenItem = {
   name: string;
   address: string;
   decimals: number;
+  source?: string;
+};
+
+type NetworkItem = {
+  chain_id: number;
+  chain_key: string;
+  name: string;
+  network: string;
+  token_count: number;
 };
 
 type TokensResponse = {
   chains: Record<string, TokenItem[]>;
+  networks?: NetworkItem[];
+  registry_version?: number;
+  generated_at?: string;
 };
 
 type QuoteResponse = {
@@ -27,27 +39,54 @@ type QuoteResponse = {
   engine: string;
 };
 
+type RiskAssumption = {
+  endpoint: string;
+  asset_symbol: string;
+  category: string;
+  risk_level: 'low' | 'medium' | 'high';
+  statement: string;
+};
+
+type RiskAssumptionsResponse = {
+  chain_id: number;
+  chain_key: string;
+  chain_name: string;
+  assumptions: RiskAssumption[];
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_TEMPO_API_BASE || 'http://localhost:8500';
 const DEFAULT_TOKENS: TokenItem[] = [
   { symbol: 'mUSD', name: 'Musical USD', address: 'local-musd', decimals: 18 },
   { symbol: 'WETH', name: 'Wrapped Ether', address: 'local-weth', decimals: 18 }
 ];
+const DEFAULT_NETWORKS: NetworkItem[] = [
+  { chain_id: 31337, chain_key: 'hardhat-local', name: 'Hardhat Local', network: 'hardhat', token_count: 2 },
+  { chain_id: 11155111, chain_key: 'ethereum-sepolia', name: 'Ethereum Sepolia', network: 'sepolia', token_count: 2 },
+  { chain_id: 97, chain_key: 'bnb-testnet', name: 'BNB Testnet', network: 'bscTestnet', token_count: 2 }
+];
 
 export default function HarmonyPage() {
   const [chainId, setChainId] = useState<number>(31337);
   const [tokensByChain, setTokensByChain] = useState<Record<string, TokenItem[]>>({});
+  const [networks, setNetworks] = useState<NetworkItem[]>(DEFAULT_NETWORKS);
   const [tokenIn, setTokenIn] = useState<string>('mUSD');
   const [tokenOut, setTokenOut] = useState<string>('WETH');
   const [amountIn, setAmountIn] = useState<string>('100');
   const [slippageBps, setSlippageBps] = useState<number>(50);
+  const [riskAssumptions, setRiskAssumptions] = useState<RiskAssumption[]>([]);
+  const [riskError, setRiskError] = useState<string>('');
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
 
-  const { chainId: walletChainId, isConnected } = useAccount();
+  const { address, chainId: walletChainId, isConnected } = useAccount();
   const { chains, switchChain, isPending: isSwitching } = useSwitchChain();
 
   const chainTokens = useMemo(() => tokensByChain[String(chainId)] || DEFAULT_TOKENS, [tokensByChain, chainId]);
+  const networkOptions = useMemo(
+    () => (networks.length ? networks : DEFAULT_NETWORKS),
+    [networks]
+  );
 
   useEffect(() => {
     let active = true;
@@ -62,6 +101,9 @@ export default function HarmonyPage() {
         if (!active) return;
 
         setTokensByChain(payload.chains || {});
+        if (payload.networks?.length) {
+          setNetworks(payload.networks);
+        }
 
         const preferred = payload.chains?.[String(chainId)] || DEFAULT_TOKENS;
         if (!preferred.some((x) => x.symbol === tokenIn)) {
@@ -82,6 +124,32 @@ export default function HarmonyPage() {
       active = false;
     };
   }, [chainId, tokenIn, tokenOut]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadRiskAssumptions() {
+      try {
+        const res = await fetch(`${API_BASE}/risk/assumptions?chain_id=${chainId}`, { cache: 'no-store' });
+        if (!res.ok) {
+          throw new Error(`risk assumptions unavailable: ${res.status}`);
+        }
+        const payload = (await res.json()) as RiskAssumptionsResponse;
+        if (!active) return;
+        setRiskAssumptions(payload.assumptions || []);
+        setRiskError('');
+      } catch (riskFetchError) {
+        if (!active) return;
+        setRiskAssumptions([]);
+        setRiskError(riskFetchError instanceof Error ? riskFetchError.message : 'failed to load risk assumptions');
+      }
+    }
+
+    loadRiskAssumptions();
+    return () => {
+      active = false;
+    };
+  }, [chainId]);
 
   function onChainChange(nextChainId: number) {
     setChainId(nextChainId);
@@ -114,6 +182,9 @@ export default function HarmonyPage() {
       amount_in: amountIn,
       slippage_bps: String(slippageBps)
     });
+    if (address) {
+      params.set('wallet_address', address);
+    }
 
     try {
       setLoading(true);
@@ -155,9 +226,11 @@ export default function HarmonyPage() {
                 onChange={(event) => onChainChange(Number(event.target.value))}
                 className="w-full rounded-xl border border-slateblue/80 bg-slate-950/80 px-3 py-2"
               >
-                <option value={31337}>Hardhat Local (31337)</option>
-                <option value={11155111}>Ethereum Sepolia (11155111)</option>
-                <option value={97}>BNB Testnet (97)</option>
+                {networkOptions.map((network) => (
+                  <option key={network.chain_id} value={network.chain_id}>
+                    {network.name} ({network.chain_id})
+                  </option>
+                ))}
               </select>
             </label>
 
@@ -267,10 +340,24 @@ export default function HarmonyPage() {
           <p className="text-xs uppercase tracking-[0.22em] text-amber-300">Dissonance Guards</p>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             <li>Set strict slippage before execution.</li>
-            <li>Bridged assets (wBTC/wSOL) inherit bridge trust assumptions.</li>
             <li>Quotes are indicative until wallet signs on-chain swap.</li>
             <li>If wallet chain mismatches, switch network before submit.</li>
           </ul>
+          {riskError ? <p className="mt-2 text-xs text-rose-200">{riskError}</p> : null}
+          {riskAssumptions.length ? (
+            <div className="mt-3 space-y-2 text-xs text-amber-100/95">
+              {riskAssumptions.map((assumption) => (
+                <div key={`${assumption.endpoint}-${assumption.asset_symbol}`} className="rounded-lg border border-amber-300/30 bg-amber-950/20 p-2">
+                  <p>
+                    <span className="font-semibold">{assumption.asset_symbol}</span>{' '}
+                    <span className="uppercase tracking-[0.12em]">[{assumption.risk_level}]</span>{' '}
+                    <span className="font-mono text-[10px] opacity-80">{assumption.endpoint}</span>
+                  </p>
+                  <p className="mt-1 opacity-90">{assumption.statement}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </section>
       </div>
     </div>

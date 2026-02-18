@@ -10,10 +10,11 @@ Movement 3 chain indexer (Section) for mCryptoEx.
 
 ## Key env vars
 
-- `INDEXER_RPC_URL`
-- `INDEXER_CHAIN_ID`
-- `INDEXER_PAIR_ADDRESSES`
-- `INDEXER_STABILIZER_ADDRESSES`
+- `CHAIN_REGISTRY_PATH`
+- `INDEXER_CHAIN_KEY` (e.g. `ethereum-sepolia`, `bnb-testnet`, `hardhat-local`)
+- `INDEXER_RPC_URL` (optional override; falls back to chain registry `rpc_env_key`)
+- `INDEXER_PAIR_ADDRESSES` (optional override)
+- `INDEXER_STABILIZER_ADDRESSES` (optional override)
 - `DEX_TX_RAW_TOPIC`
 - `INDEXER_ENABLE_SIMULATION`
 

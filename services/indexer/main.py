@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -7,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext
+from pathlib import Path
 from typing import Any
 
 from confluent_kafka import Producer
@@ -59,6 +61,7 @@ class Settings:
     service_name: str
     kafka_bootstrap_servers: str
     dex_tx_raw_topic: str
+    chain_key: str
     chain_id: int
     rpc_url: str
     pair_addresses: list[str]
@@ -90,25 +93,110 @@ def _csv_env(name: str) -> list[str]:
     return [part.strip() for part in raw.split(',') if part.strip()]
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _registry_path() -> Path:
+    configured = os.getenv('CHAIN_REGISTRY_PATH', 'packages/sdk/data/chain-registry.generated.json')
+    path = Path(configured)
+    if path.is_absolute():
+        return path
+    return _repo_root() / path
+
+
+def _load_chain_from_registry(chain_key: str) -> dict[str, Any]:
+    path = _registry_path()
+    if not path.exists():
+        return {}
+
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError:
+        return {}
+
+    chains = payload.get('chains', [])
+    if not isinstance(chains, list):
+        return {}
+
+    for chain in chains:
+        if str(chain.get('chain_key', '')).strip() == chain_key:
+            return chain if isinstance(chain, dict) else {}
+    return {}
+
+
+def _registry_addresses(chain: dict[str, Any], key: str) -> list[str]:
+    indexer_cfg = chain.get('indexer', {})
+    if not isinstance(indexer_cfg, dict):
+        return []
+    value = indexer_cfg.get(key, [])
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 def _settings_from_env() -> Settings:
-    start_block_env = os.getenv('INDEXER_START_BLOCK', 'latest').strip().lower()
+    chain_key = os.getenv('INDEXER_CHAIN_KEY', 'hardhat-local').strip()
+    chain_from_registry = _load_chain_from_registry(chain_key)
+    indexer_cfg = chain_from_registry.get('indexer', {}) if isinstance(chain_from_registry, dict) else {}
+
+    start_block_default = 'latest'
+    if isinstance(indexer_cfg, dict):
+        start_block_default = str(indexer_cfg.get('start_block', 'latest'))
+
+    start_block_env = os.getenv('INDEXER_START_BLOCK', start_block_default).strip().lower()
     start_block: int | None
     if start_block_env in {'', 'latest'}:
         start_block = None
     else:
         start_block = int(start_block_env)
 
+    chain_id_default = 31337
+    if isinstance(chain_from_registry, dict):
+        try:
+            chain_id_default = int(chain_from_registry.get('chain_id', 31337))
+        except (TypeError, ValueError):
+            chain_id_default = 31337
+
+    rpc_env_key = ''
+    default_rpc_url = ''
+    if isinstance(chain_from_registry, dict):
+        rpc_env_key = str(chain_from_registry.get('rpc_env_key', '')).strip()
+        default_rpc_url = str(chain_from_registry.get('default_rpc_url', '')).strip()
+
+    rpc_from_chain_env = os.getenv(rpc_env_key, '').strip() if rpc_env_key else ''
+    rpc_url = os.getenv('INDEXER_RPC_URL', '').strip() or rpc_from_chain_env or default_rpc_url
+
+    registry_pairs = _registry_addresses(chain_from_registry, 'pair_addresses')
+    registry_stabilizers = _registry_addresses(chain_from_registry, 'stabilizer_addresses')
+
+    pair_addresses = _csv_env('INDEXER_PAIR_ADDRESSES')
+    if not pair_addresses and registry_pairs:
+        pair_addresses = registry_pairs
+
+    stabilizer_addresses = _csv_env('INDEXER_STABILIZER_ADDRESSES')
+    if not stabilizer_addresses and registry_stabilizers:
+        stabilizer_addresses = registry_stabilizers
+
+    confirmation_depth_default = 0
+    if isinstance(indexer_cfg, dict):
+        try:
+            confirmation_depth_default = int(indexer_cfg.get('confirmation_depth', 0))
+        except (TypeError, ValueError):
+            confirmation_depth_default = 0
+
     return Settings(
         service_name=os.getenv('SERVICE_NAME', 'indexer'),
         kafka_bootstrap_servers=os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'redpanda:9092'),
         dex_tx_raw_topic=os.getenv('DEX_TX_RAW_TOPIC', 'dex_tx_raw'),
-        chain_id=int(os.getenv('INDEXER_CHAIN_ID', '31337')),
-        rpc_url=os.getenv('INDEXER_RPC_URL', '').strip(),
-        pair_addresses=_csv_env('INDEXER_PAIR_ADDRESSES'),
-        stabilizer_addresses=_csv_env('INDEXER_STABILIZER_ADDRESSES'),
+        chain_key=chain_key,
+        chain_id=int(os.getenv('INDEXER_CHAIN_ID', str(chain_id_default))),
+        rpc_url=rpc_url,
+        pair_addresses=pair_addresses,
+        stabilizer_addresses=stabilizer_addresses,
         poll_interval_seconds=int(os.getenv('INDEXER_POLL_INTERVAL_SECONDS', '5')),
         start_block=start_block,
-        confirmation_depth=int(os.getenv('INDEXER_CONFIRMATION_DEPTH', '0')),
+        confirmation_depth=int(os.getenv('INDEXER_CONFIRMATION_DEPTH', str(confirmation_depth_default))),
         native_usd_price=Decimal(os.getenv('INDEXER_NATIVE_USD_PRICE', '3300')),
         swap_fee_bps=int(os.getenv('INDEXER_SWAP_FEE_BPS', '30')),
         protocol_revenue_share_bps=int(os.getenv('INDEXER_PROTOCOL_REVENUE_SHARE_BPS', '4000')),
@@ -159,7 +247,14 @@ class ChainIndexer:
         self._last_simulated_at = 0.0
 
     def run(self) -> None:
-        LOGGER.info('starting service=%s chain_id=%s', self.settings.service_name, self.settings.chain_id)
+        LOGGER.info(
+            'starting service=%s chain_key=%s chain_id=%s pair_count=%s stabilizer_count=%s',
+            self.settings.service_name,
+            self.settings.chain_key,
+            self.settings.chain_id,
+            len(self.settings.pair_addresses),
+            len(self.settings.stabilizer_addresses)
+        )
 
         if self.settings.rpc_url:
             self.web3 = Web3(Web3.HTTPProvider(self.settings.rpc_url, request_kwargs={'timeout': 10}))

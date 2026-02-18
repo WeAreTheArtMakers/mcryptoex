@@ -7,7 +7,12 @@ Baseline stack ported from Polyphony patterns for Movement 1:
 - ClickHouse
 - OpenTelemetry Collector + Jaeger
 - Prometheus + Grafana
-- Placeholder API/Web/Worker services
+- API/Web and Tempo workers
+  - `indexer-local`
+  - `indexer-ethereum`
+  - `indexer-bnb`
+  - `validator`
+  - `ledger-writer`
 
 Run from repository root:
 

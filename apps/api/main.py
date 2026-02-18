@@ -7,12 +7,13 @@ from decimal import Decimal
 import asyncpg
 import clickhouse_connect
 from confluent_kafka import Producer
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from prometheus_client import Counter, make_asgi_app
 from pydantic import BaseModel, Field
 
+from .chain_registry import risk_assumptions_payload, tokens_payload
 from .compliance import enforce_optional_compliance
 from .config import get_settings
 from .proto_codec import ProtoCodec
@@ -107,21 +108,15 @@ async def ready() -> dict[str, str]:
 
 @app.get('/tokens')
 async def tokens() -> dict:
-    return {
-        'chains': {
-            '31337': [
-                {'symbol': 'mUSD', 'name': 'Musical USD', 'address': 'local-musd', 'decimals': 18},
-                {'symbol': 'WETH', 'name': 'Wrapped Ether', 'address': 'local-weth', 'decimals': 18},
-                {'symbol': 'WBTC', 'name': 'Wrapped Bitcoin', 'address': 'local-wbtc', 'decimals': 8},
-                {'symbol': 'WSOL', 'name': 'Wrapped SOL (EVM)', 'address': 'local-wsol', 'decimals': 18}
-            ],
-            '97': [
-                {'symbol': 'mUSD', 'name': 'Musical USD', 'address': 'bsc-musd', 'decimals': 18},
-                {'symbol': 'WBNB', 'name': 'Wrapped BNB', 'address': 'bsc-wbnb', 'decimals': 18},
-                {'symbol': 'wBTC', 'name': 'Wrapped Bitcoin (bridge)', 'address': 'bsc-wbtc', 'decimals': 18}
-            ]
-        }
-    }
+    return tokens_payload()
+
+
+@app.get('/risk/assumptions')
+async def risk_assumptions(chain_id: int = Query(..., gt=0)) -> dict:
+    payload = risk_assumptions_payload(chain_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f'chain_id={chain_id} not found in registry')
+    return payload
 
 
 @app.get('/quote')

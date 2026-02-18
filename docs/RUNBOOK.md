@@ -82,7 +82,30 @@ Phase 5 security check bundle:
 ./scripts/security_check.sh
 ```
 
-## 6) Testnet deployment (Movement 2 baseline)
+Phase 6 chain-registry + cross-chain check bundle:
+
+```bash
+npm run check:phase6
+```
+
+## 6) Generate chain registry
+
+Token/chain/indexer config is generated from deployment registries:
+
+```bash
+python3 scripts/generate_chain_registry.py
+```
+
+Output:
+
+- `packages/sdk/data/chain-registry.generated.json`
+
+This file drives:
+
+- Tempo API `/tokens` and `/risk/assumptions`
+- indexer worker chain settings via `INDEXER_CHAIN_KEY`
+
+## 7) Testnet deployment (Movement 2 baseline)
 
 Set values in `packages/contracts/.env`:
 
@@ -100,7 +123,7 @@ npm run deploy:bscTestnet
 
 Address registries are written to `packages/contracts/deploy/address-registry.<network>.json`.
 
-## 7) Timelock/multisig-ready admin handoff
+## 8) Timelock/multisig-ready admin handoff
 
 After deployment, assign governance ownership/roles to your timelock or multisig:
 
@@ -122,7 +145,7 @@ npm run handoff:admin -- --network sepolia
 
 Then call `acceptOwnership()` on `HarmonyFactory` and `HarmonyRouter` from the new admin.
 
-## 8) Secrets and local wallets
+## 9) Secrets and local wallets
 
 - Never commit private keys.
 - Keep local-only keys in `.local-secrets/` (already gitignored).
@@ -134,7 +157,7 @@ git ls-files .local-secrets
 
 The command should print nothing.
 
-## 9) Stop and clean
+## 10) Stop and clean
 
 ```bash
 docker compose down -v

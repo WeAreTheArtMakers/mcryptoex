@@ -1,0 +1,247 @@
+{
+  "version": 1,
+  "generated_at": "2026-02-18T18:29:03.842171+00:00",
+  "source": "packages/contracts/deploy/address-registry.*.json",
+  "chains": [
+    {
+      "chain_key": "hardhat-local",
+      "chain_id": 31337,
+      "name": "Hardhat Local",
+      "network": "hardhat",
+      "rpc_env_key": "INDEXER_HARDHAT_RPC_URL",
+      "default_rpc_url": "http://host.docker.internal:8545",
+      "contracts": {
+        "musd": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+        "stabilizer": "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
+        "oracle": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
+        "harmony_factory": "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
+        "harmony_router": "0x610178dA211FEF7D417bC0e6FeD39F05609AD788"
+      },
+      "indexer": {
+        "pair_addresses": [],
+        "stabilizer_addresses": [
+          "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
+        ],
+        "start_block": "latest",
+        "confirmation_depth": 0
+      },
+      "tokens": [
+        {
+          "symbol": "mUSD",
+          "name": "Musical USD",
+          "address": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+          "decimals": 18,
+          "source": "contracts.musd"
+        },
+        {
+          "symbol": "USDC",
+          "name": "USD Coin (local collateral)",
+          "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+          "decimals": 6,
+          "source": "contracts.collateral"
+        },
+        {
+          "symbol": "WETH",
+          "name": "Wrapped Ether",
+          "address": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+          "decimals": 18,
+          "source": "contracts.tokenA"
+        },
+        {
+          "symbol": "WBTC",
+          "name": "Wrapped Bitcoin",
+          "address": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+          "decimals": 8,
+          "source": "contracts.tokenB"
+        },
+        {
+          "symbol": "WSOL",
+          "name": "Wrapped SOL (EVM)",
+          "address": "local-wsol",
+          "decimals": 18,
+          "source": "defaults"
+        }
+      ],
+      "trust_assumptions": [
+        {
+          "endpoint": "native-musd-policy",
+          "asset_symbol": "mUSD",
+          "category": "native",
+          "risk_level": "medium",
+          "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
+        },
+        {
+          "endpoint": "wrapped-btc-evm",
+          "asset_symbol": "wBTC",
+          "category": "wrapped",
+          "risk_level": "high",
+          "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
+        },
+        {
+          "endpoint": "wrapped-sol-evm",
+          "asset_symbol": "wSOL",
+          "category": "wrapped",
+          "risk_level": "high",
+          "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
+        }
+      ],
+      "provenance": {
+        "deployed_registry_file": "address-registry.hardhat.json"
+      }
+    },
+    {
+      "chain_key": "ethereum-sepolia",
+      "chain_id": 11155111,
+      "name": "Ethereum Sepolia",
+      "network": "sepolia",
+      "rpc_env_key": "SEPOLIA_RPC_URL",
+      "default_rpc_url": "",
+      "contracts": {
+        "musd": "",
+        "stabilizer": "",
+        "oracle": "",
+        "harmony_factory": "",
+        "harmony_router": ""
+      },
+      "indexer": {
+        "pair_addresses": [],
+        "stabilizer_addresses": [],
+        "start_block": "latest",
+        "confirmation_depth": 2
+      },
+      "tokens": [
+        {
+          "symbol": "mUSD",
+          "name": "Musical USD",
+          "address": "unconfigured-musd",
+          "decimals": 18,
+          "source": "contracts.musd"
+        },
+        {
+          "symbol": "WETH",
+          "name": "Wrapped Ether",
+          "address": "bridge-weth-sepolia",
+          "decimals": 18,
+          "source": "defaults"
+        },
+        {
+          "symbol": "wBTC",
+          "name": "Wrapped Bitcoin (bridge)",
+          "address": "bridge-wbtc-sepolia",
+          "decimals": 8,
+          "source": "defaults"
+        },
+        {
+          "symbol": "wSOL",
+          "name": "Wrapped SOL (bridge)",
+          "address": "bridge-wsol-sepolia",
+          "decimals": 18,
+          "source": "defaults"
+        }
+      ],
+      "trust_assumptions": [
+        {
+          "endpoint": "native-musd-policy",
+          "asset_symbol": "mUSD",
+          "category": "native",
+          "risk_level": "medium",
+          "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
+        },
+        {
+          "endpoint": "wrapped-btc-evm",
+          "asset_symbol": "wBTC",
+          "category": "wrapped",
+          "risk_level": "high",
+          "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
+        },
+        {
+          "endpoint": "wrapped-sol-evm",
+          "asset_symbol": "wSOL",
+          "category": "wrapped",
+          "risk_level": "high",
+          "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
+        }
+      ],
+      "provenance": {
+        "deployed_registry_file": null
+      }
+    },
+    {
+      "chain_key": "bnb-testnet",
+      "chain_id": 97,
+      "name": "BNB Chain Testnet",
+      "network": "bscTestnet",
+      "rpc_env_key": "BSC_TESTNET_RPC_URL",
+      "default_rpc_url": "",
+      "contracts": {
+        "musd": "",
+        "stabilizer": "",
+        "oracle": "",
+        "harmony_factory": "",
+        "harmony_router": ""
+      },
+      "indexer": {
+        "pair_addresses": [],
+        "stabilizer_addresses": [],
+        "start_block": "latest",
+        "confirmation_depth": 3
+      },
+      "tokens": [
+        {
+          "symbol": "mUSD",
+          "name": "Musical USD",
+          "address": "unconfigured-musd",
+          "decimals": 18,
+          "source": "contracts.musd"
+        },
+        {
+          "symbol": "WBNB",
+          "name": "Wrapped BNB",
+          "address": "bridge-wbnb-bsc",
+          "decimals": 18,
+          "source": "defaults"
+        },
+        {
+          "symbol": "wBTC",
+          "name": "Wrapped Bitcoin (bridge)",
+          "address": "bridge-wbtc-bsc",
+          "decimals": 18,
+          "source": "defaults"
+        },
+        {
+          "symbol": "wSOL",
+          "name": "Wrapped SOL (bridge)",
+          "address": "bridge-wsol-bsc",
+          "decimals": 18,
+          "source": "defaults"
+        }
+      ],
+      "trust_assumptions": [
+        {
+          "endpoint": "native-musd-policy",
+          "asset_symbol": "mUSD",
+          "category": "native",
+          "risk_level": "medium",
+          "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
+        },
+        {
+          "endpoint": "wrapped-btc-evm",
+          "asset_symbol": "wBTC",
+          "category": "wrapped",
+          "risk_level": "high",
+          "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
+        },
+        {
+          "endpoint": "wrapped-sol-evm",
+          "asset_symbol": "wSOL",
+          "category": "wrapped",
+          "risk_level": "high",
+          "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
+        }
+      ],
+      "provenance": {
+        "deployed_registry_file": null
+      }
+    }
+  ]
+}

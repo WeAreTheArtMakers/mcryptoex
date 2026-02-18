@@ -10,6 +10,7 @@ COPY apps/api/requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip && pip install -r /app/requirements.txt
 
 COPY apps /app/apps
+COPY packages/sdk /app/packages/sdk
 COPY packages/proto /app/packages/proto
 
 WORKDIR /app

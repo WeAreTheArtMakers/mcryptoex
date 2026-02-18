@@ -10,6 +10,7 @@ Orchestra-grade non-custodial DEX monorepo.
 - Phase 3 tempo pipeline: Protobuf Notes + validator + ledger-writer + analytics rollups
 - Phase 4 frontend MVP: Next.js Orchestra UI with `/harmony` quote + wallet connect
 - Phase 5 hardening: pause/path guardrails tests + security docs + CI baseline
+- Phase 6 cross-chain baseline: multi-chain indexer workers + SDK adapter boundaries + generated chain registry + trust assumptions endpoint/UI
 
 ## Quick start
 
@@ -23,6 +24,12 @@ Phase 5 checks:
 
 ```bash
 npm run check:phase5
+```
+
+Phase 6 checks:
+
+```bash
+npm run check:phase6
 ```
 
 Primary docs:

@@ -11,6 +11,7 @@ COPY services/indexer/requirements.txt /tmp/requirements.txt
 RUN pip install --upgrade pip && pip install -r /tmp/requirements.txt
 
 COPY services /app/services
+COPY packages/sdk /app/packages/sdk
 COPY packages/proto /app/packages/proto
 
 CMD ["python", "-m", "services.indexer.main"]

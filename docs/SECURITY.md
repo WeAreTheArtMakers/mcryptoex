@@ -68,7 +68,7 @@ Implemented controls:
   - contract compile + tests
   - Python syntax compile
   - tracked-secrets guard
-  - optional Slither run if installed
+  - Slither run (local binary if available, otherwise dockerized Slither)
 
 ## Audit readiness checklist
 

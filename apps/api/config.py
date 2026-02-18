@@ -26,6 +26,7 @@ class Settings:
     clickhouse_password: str
     clickhouse_database: str
     dex_tx_raw_topic: str
+    chain_registry_path: str
     compliance_enforcement_enabled: bool
     compliance_blocked_countries: str
     compliance_sanctions_blocked_wallets: str
@@ -49,6 +50,10 @@ def get_settings() -> Settings:
         clickhouse_password=os.getenv('CLICKHOUSE_PASSWORD', 'mcryptoex'),
         clickhouse_database=os.getenv('CLICKHOUSE_DATABASE', 'mcryptoex'),
         dex_tx_raw_topic=os.getenv('DEX_TX_RAW_TOPIC', 'dex_tx_raw'),
+        chain_registry_path=os.getenv(
+            'CHAIN_REGISTRY_PATH',
+            'packages/sdk/data/chain-registry.generated.json'
+        ),
         compliance_enforcement_enabled=_env_bool('COMPLIANCE_ENFORCEMENT_ENABLED', False),
         compliance_blocked_countries=os.getenv('COMPLIANCE_BLOCKED_COUNTRIES', ''),
         compliance_sanctions_blocked_wallets=os.getenv('COMPLIANCE_SANCTIONS_BLOCKED_WALLETS', '')

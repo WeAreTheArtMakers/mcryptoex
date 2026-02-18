@@ -259,6 +259,27 @@ flowchart LR
 6. Movement 6 (Cross-chain adapters)
 - Introduce EVM adapters and wrapped BTC/SOL trust-boundary documentation.
 
+## 9) Movement 6 implementation notes
+
+Implemented in `mcryptoex`:
+
+- generated chain registry:
+  - `scripts/generate_chain_registry.py`
+  - output: `packages/sdk/data/chain-registry.generated.json`
+- SDK adapter boundaries:
+  - `packages/sdk/src/adapters/types.ts`
+  - `packages/sdk/src/adapters/evm.ts`
+  - `packages/sdk/src/adapters/btc.ts`
+  - `packages/sdk/src/adapters/sol.ts`
+- multi-chain indexer workers (compose):
+  - `indexer-local` (`hardhat-local`)
+  - `indexer-ethereum` (`ethereum-sepolia`)
+  - `indexer-bnb` (`bnb-testnet`)
+  - wired via `INDEXER_CHAIN_KEY` + `CHAIN_REGISTRY_PATH`
+- API chain/risk endpoints:
+  - `GET /tokens` (registry-backed)
+  - `GET /risk/assumptions` (bridge/wrapped trust assumptions by chain)
+
 ## 8) Performance check for Phase 0
 
 - Source repos audited with file-level provenance.

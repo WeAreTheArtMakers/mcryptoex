@@ -7,6 +7,7 @@ Tempo API (FastAPI) for mCryptoEx.
 - `GET /health`
 - `GET /health/ready`
 - `GET /tokens`
+- `GET /risk/assumptions?chain_id=<id>`
 - `GET /quote`
 - `GET /pairs`
 - `GET /analytics`
@@ -27,3 +28,9 @@ When enabled:
 
 - `/quote` checks `country_code` and optional `wallet_address`
 - `/debug/emit-swap-note` checks `user_address`
+
+## Chain registry
+
+- `CHAIN_REGISTRY_PATH` points to generated registry json:
+  - default `packages/sdk/data/chain-registry.generated.json`
+- `/tokens` and `/risk/assumptions` are served from this registry.
