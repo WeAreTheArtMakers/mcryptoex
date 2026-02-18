@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  font-family: 'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(circle at 20% 10%, rgba(245, 158, 11, 0.16), transparent 46%),
+    radial-gradient(circle at 88% 15%, rgba(52, 211, 153, 0.16), transparent 45%),
+    #0b1220;
+}
+
+* {
+  box-sizing: border-box;
+}

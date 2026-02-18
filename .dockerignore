@@ -1,0 +1,16 @@
+.git
+.gitignore
+.DS_Store
+
+**/node_modules
+**/.next
+**/dist
+**/build
+**/.turbo
+
+.env
+.env.*
+!.env.example
+
+.local-secrets
+packages/contracts/deploy/address-registry.hardhat.json

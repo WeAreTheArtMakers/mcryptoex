@@ -9,6 +9,7 @@
     "dev:ps": "docker compose ps",
     "dev:logs": "docker compose logs -f",
     "check:phase3": "python3 scripts/e2e_pipeline_check.py",
+    "web:build": "cd apps/web && npm run build",
     "lint": "echo 'Phase 1: lint targets will be added per workspace in later movements'",
     "test": "echo 'Phase 1: tests are introduced from Movement 2 onward'"
   }

@@ -215,10 +215,14 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_TEMPO_API_BASE: http://localhost:${API_PORT}
+        NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-}
+        NEXT_PUBLIC_LOCAL_RPC_URL: ${NEXT_PUBLIC_LOCAL_RPC_URL:-http://host.docker.internal:8545}
     depends_on:
       - api
     ports:
-      - '${WEB_PORT}:80'
+      - '${WEB_PORT}:3000'
 
   prometheus:
     image: prom/prometheus:v3.3.1
