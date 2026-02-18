@@ -1,15 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Ownable} from '@openzeppelin/contracts/access/Ownable.sol';
+import {Ownable2Step} from '@openzeppelin/contracts/access/Ownable2Step.sol';
+import {Pausable} from '@openzeppelin/contracts/utils/Pausable.sol';
+import {ReentrancyGuard} from '@openzeppelin/contracts/utils/ReentrancyGuard.sol';
+
 import {IHarmonyFactory} from './interfaces/IHarmonyFactory.sol';
 import {IHarmonyPair} from './interfaces/IHarmonyPair.sol';
 import {HarmonyLibrary} from './libraries/HarmonyLibrary.sol';
 import {TransferHelper} from './libraries/TransferHelper.sol';
 
-contract HarmonyRouter {
+contract HarmonyRouter is Ownable2Step, Pausable, ReentrancyGuard {
     using HarmonyLibrary for address;
 
+    uint8 public constant MAX_ALLOWED_PATH_LENGTH = 8;
+
     address public immutable factory;
+    uint8 public maxPathLength;
 
     event NoteLiquidityAdded(
         address indexed sender,
@@ -39,19 +47,24 @@ contract HarmonyRouter {
         uint256 amountOut,
         address to
     );
+    event MaxPathLengthUpdated(uint8 previousPathLength, uint8 newPathLength);
 
+    error InvalidFactory();
     error Expired(uint256 deadline, uint256 blockTimestamp);
     error InsufficientAAmount(uint256 expectedMin, uint256 actual);
     error InsufficientBAmount(uint256 expectedMin, uint256 actual);
     error InsufficientOutput(uint256 expectedMin, uint256 actual);
+    error InvalidPathLength(uint8 pathLength);
 
     modifier ensure(uint256 deadline) {
         if (deadline < block.timestamp) revert Expired(deadline, block.timestamp);
         _;
     }
 
-    constructor(address factoryAddress) {
+    constructor(address factoryAddress) Ownable(msg.sender) {
+        if (factoryAddress == address(0)) revert InvalidFactory();
         factory = factoryAddress;
+        maxPathLength = 4;
     }
 
     function addLiquidity(
@@ -63,7 +76,7 @@ contract HarmonyRouter {
         uint256 amountBMin,
         address to,
         uint256 deadline
-    ) external ensure(deadline) returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
+    ) external ensure(deadline) whenNotPaused nonReentrant returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
         if (IHarmonyFactory(factory).getPair(tokenA, tokenB) == address(0)) {
             IHarmonyFactory(factory).createPair(tokenA, tokenB);
         }
@@ -87,7 +100,7 @@ contract HarmonyRouter {
         uint256 amountBMin,
         address to,
         uint256 deadline
-    ) external ensure(deadline) returns (uint256 amountA, uint256 amountB) {
+    ) external ensure(deadline) whenNotPaused nonReentrant returns (uint256 amountA, uint256 amountB) {
         address pair = HarmonyLibrary.pairFor(factory, tokenA, tokenB);
         IHarmonyPair(pair).transferFrom(msg.sender, pair, liquidity);
 
@@ -107,7 +120,8 @@ contract HarmonyRouter {
         address[] calldata path,
         address to,
         uint256 deadline
-    ) external ensure(deadline) returns (uint256[] memory amounts) {
+    ) external ensure(deadline) whenNotPaused nonReentrant returns (uint256[] memory amounts) {
+        if (path.length > maxPathLength || path.length < 2) revert InvalidPathLength(uint8(path.length));
         amounts = HarmonyLibrary.getAmountsOut(factory, amountIn, path);
         uint256 amountOut = amounts[amounts.length - 1];
         if (amountOut < amountOutMin) revert InsufficientOutput(amountOutMin, amountOut);
@@ -122,6 +136,23 @@ contract HarmonyRouter {
         _swap(amounts, path, to);
 
         emit NoteSwap(msg.sender, path[0], path[path.length - 1], amounts[0], amountOut, to);
+    }
+
+    function setMaxPathLength(uint8 newPathLength) external onlyOwner {
+        if (newPathLength < 2 || newPathLength > MAX_ALLOWED_PATH_LENGTH) {
+            revert InvalidPathLength(newPathLength);
+        }
+        uint8 previous = maxPathLength;
+        maxPathLength = newPathLength;
+        emit MaxPathLengthUpdated(previous, newPathLength);
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
     }
 
     function getAmountsOut(uint256 amountIn, address[] calldata path) external view returns (uint256[] memory amounts) {

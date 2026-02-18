@@ -7,4 +7,6 @@ interface IHarmonyFactory {
     function createPair(address tokenA, address tokenB) external returns (address pair);
 
     function swapFeeBps() external view returns (uint16);
+
+    function paused() external view returns (bool);
 }

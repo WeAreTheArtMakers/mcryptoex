@@ -3,10 +3,11 @@ pragma solidity ^0.8.24;
 
 import {Ownable} from '@openzeppelin/contracts/access/Ownable.sol';
 import {Ownable2Step} from '@openzeppelin/contracts/access/Ownable2Step.sol';
+import {Pausable} from '@openzeppelin/contracts/utils/Pausable.sol';
 
 import {HarmonyPair} from './HarmonyPair.sol';
 
-contract HarmonyFactory is Ownable2Step {
+contract HarmonyFactory is Ownable2Step, Pausable {
     uint16 public constant MAX_SWAP_FEE_BPS = 1_000;
 
     mapping(address => mapping(address => address)) public getPair;
@@ -30,7 +31,7 @@ contract HarmonyFactory is Ownable2Step {
         return allPairs.length;
     }
 
-    function createPair(address tokenA, address tokenB) external returns (address pair) {
+    function createPair(address tokenA, address tokenB) external whenNotPaused returns (address pair) {
         if (tokenA == tokenB) revert IdenticalAddresses();
 
         (address token0, address token1) = tokenA < tokenB
@@ -55,5 +56,13 @@ contract HarmonyFactory is Ownable2Step {
         uint16 previous = swapFeeBps;
         swapFeeBps = newSwapFeeBps;
         emit SwapFeeUpdated(previous, newSwapFeeBps);
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
     }
 }

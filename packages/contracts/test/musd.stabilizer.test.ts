@@ -144,4 +144,29 @@ describe('mUSD + Stabilizer', function () {
     expect(await stabilizer.circuitBreakerTripped()).to.equal(true);
     expect(await stabilizer.paused()).to.equal(true);
   });
+
+  it('enforces pausability on mint flow and resumes after unpause', async function () {
+    const { admin, alice, usdc, musd, stabilizer } = await deployFixture();
+
+    const collateralIn = 200_000000n;
+    await (await usdc.connect(alice).approve(await stabilizer.getAddress(), collateralIn)).wait();
+
+    await (await stabilizer.connect(admin).pause()).wait();
+
+    await expect(
+      stabilizer
+        .connect(alice)
+        .mintWithCollateral(await usdc.getAddress(), collateralIn, 0n, alice.address)
+    ).to.be.revertedWithCustomError(stabilizer, 'EnforcedPause');
+
+    await (await stabilizer.connect(admin).unpause()).wait();
+
+    await (
+      await stabilizer
+        .connect(alice)
+        .mintWithCollateral(await usdc.getAddress(), collateralIn, 0n, alice.address)
+    ).wait();
+
+    expect(await musd.balanceOf(alice.address)).to.be.greaterThan(0n);
+  });
 });

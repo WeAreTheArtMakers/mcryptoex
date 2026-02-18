@@ -42,6 +42,7 @@ contract HarmonyPair is ERC20, ERC20Permit {
     error InsufficientLiquidity();
     error InvalidTo();
     error Overflow();
+    error EnginePaused();
 
     modifier lock() {
         require(_unlocked == 1, 'PAIR_LOCKED');
@@ -66,6 +67,7 @@ contract HarmonyPair is ERC20, ERC20Permit {
     }
 
     function mint(address to) external lock returns (uint256 liquidity) {
+        _requireFactoryActive();
         (uint112 _reserve0, uint112 _reserve1, ) = getReserves();
         uint256 balance0 = IERC20(token0).balanceOf(address(this));
         uint256 balance1 = IERC20(token1).balanceOf(address(this));
@@ -93,6 +95,7 @@ contract HarmonyPair is ERC20, ERC20Permit {
     }
 
     function burn(address to) external lock returns (uint256 amount0, uint256 amount1) {
+        _requireFactoryActive();
         address _token0 = token0;
         address _token1 = token1;
 
@@ -118,6 +121,7 @@ contract HarmonyPair is ERC20, ERC20Permit {
     }
 
     function swap(uint256 amount0Out, uint256 amount1Out, address to) external lock {
+        _requireFactoryActive();
         if (amount0Out == 0 && amount1Out == 0) revert InsufficientOutputAmount();
         (uint112 _reserve0, uint112 _reserve1, ) = getReserves();
         if (amount0Out >= _reserve0 || amount1Out >= _reserve1) revert InsufficientLiquidity();
@@ -177,6 +181,10 @@ contract HarmonyPair is ERC20, ERC20Permit {
             abi.encodeWithSelector(IERC20.transfer.selector, to, value)
         );
         require(success && (data.length == 0 || abi.decode(data, (bool))), 'PAIR_TRANSFER_FAILED');
+    }
+
+    function _requireFactoryActive() private view {
+        if (IHarmonyFactory(factory).paused()) revert EnginePaused();
     }
 
     function _min(uint256 x, uint256 y) private pure returns (uint256 z) {

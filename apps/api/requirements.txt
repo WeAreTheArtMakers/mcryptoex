@@ -5,7 +5,6 @@ confluent-kafka==2.11.1
 clickhouse-connect==0.8.18
 prometheus-client==0.23.1
 pydantic==2.11.7
-pydantic-settings==2.10.1
 python-dotenv==1.1.1
 orjson==3.11.2
 protobuf==6.32.0

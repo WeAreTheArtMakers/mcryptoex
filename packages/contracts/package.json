@@ -9,7 +9,8 @@
     "test:performance": "hardhat test test/performance.local-swap.test.ts",
     "deploy:local": "hardhat run scripts/deploy-local.ts",
     "deploy:sepolia": "hardhat run scripts/deploy-testnets.ts --network sepolia",
-    "deploy:bscTestnet": "hardhat run scripts/deploy-testnets.ts --network bscTestnet"
+    "deploy:bscTestnet": "hardhat run scripts/deploy-testnets.ts --network bscTestnet",
+    "handoff:admin": "hardhat run scripts/handoff-admin.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

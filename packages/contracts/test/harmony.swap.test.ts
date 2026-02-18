@@ -91,4 +91,99 @@ describe('Harmony Engine (Factory/Pair/Router)', function () {
         )
     ).to.emit(router, 'NoteLiquidityRemoved');
   });
+
+  it('blocks pair operations when the factory is paused', async function () {
+    const { admin, lp, trader, tokenA, tokenB, factory, router } = await deployFixture();
+
+    const deadline = BigInt((await ethers.provider.getBlock('latest'))!.timestamp + 3600);
+
+    await (await tokenA.connect(lp).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+    await (await tokenB.connect(lp).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+    await (await tokenA.connect(trader).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+
+    await (
+      await router
+        .connect(lp)
+        .addLiquidity(
+          await tokenA.getAddress(),
+          await tokenB.getAddress(),
+          ethers.parseEther('1000'),
+          ethers.parseEther('1000'),
+          0,
+          0,
+          lp.address,
+          deadline
+        )
+    ).wait();
+
+    const pairAddress = await factory.getPair(await tokenA.getAddress(), await tokenB.getAddress());
+    const pair = await ethers.getContractAt('HarmonyPair', pairAddress);
+
+    await (await factory.connect(admin).pause()).wait();
+
+    await expect(
+      router
+        .connect(trader)
+        .swapExactTokensForTokens(
+          ethers.parseEther('1'),
+          0,
+          [await tokenA.getAddress(), await tokenB.getAddress()],
+          trader.address,
+          deadline
+        )
+    ).to.be.revertedWithCustomError(pair, 'EnginePaused');
+  });
+
+  it('blocks router state-changing operations when router is paused', async function () {
+    const { admin, lp, tokenA, tokenB, router } = await deployFixture();
+
+    const deadline = BigInt((await ethers.provider.getBlock('latest'))!.timestamp + 3600);
+    await (await tokenA.connect(lp).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+    await (await tokenB.connect(lp).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+
+    await (await router.connect(admin).pause()).wait();
+
+    await expect(
+      router
+        .connect(lp)
+        .addLiquidity(
+          await tokenA.getAddress(),
+          await tokenB.getAddress(),
+          ethers.parseEther('10'),
+          ethers.parseEther('10'),
+          0,
+          0,
+          lp.address,
+          deadline
+        )
+    ).to.be.revertedWithCustomError(router, 'EnforcedPause');
+  });
+
+  it('enforces path-length guardrails and owner controls for routing', async function () {
+    const { admin, lp, trader, tokenA, tokenB, router } = await deployFixture();
+
+    const deadline = BigInt((await ethers.provider.getBlock('latest'))!.timestamp + 3600);
+    await (await tokenA.connect(lp).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+    await (await tokenB.connect(lp).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+    await (await tokenA.connect(trader).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+
+    await expect(
+      router.connect(trader).setMaxPathLength(2)
+    ).to.be.revertedWithCustomError(router, 'OwnableUnauthorizedAccount');
+
+    await (await router.connect(admin).setMaxPathLength(2)).wait();
+    expect(await router.maxPathLength()).to.equal(2);
+
+    await expect(
+      router
+        .connect(trader)
+        .swapExactTokensForTokens(
+          ethers.parseEther('1'),
+          0,
+          [await tokenA.getAddress(), await tokenB.getAddress(), await tokenA.getAddress()],
+          trader.address,
+          deadline
+        )
+    ).to.be.revertedWithCustomError(router, 'InvalidPathLength');
+  });
 });

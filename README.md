@@ -9,6 +9,7 @@ Orchestra-grade non-custodial DEX monorepo.
 - Phase 2 contracts: mUSD + Harmony Engine + tests
 - Phase 3 tempo pipeline: Protobuf Notes + validator + ledger-writer + analytics rollups
 - Phase 4 frontend MVP: Next.js Orchestra UI with `/harmony` quote + wallet connect
+- Phase 5 hardening: pause/path guardrails tests + security docs + CI baseline
 
 ## Quick start
 
@@ -17,6 +18,20 @@ cp .env.example .env
 docker compose up --build
 python3 scripts/e2e_pipeline_check.py
 ```
+
+Phase 5 checks:
+
+```bash
+npm run check:phase5
+```
+
+Primary docs:
+
+- `docs/ARCHITECTURE.md`
+- `docs/RUNBOOK.md`
+- `docs/SECURITY.md`
+- `docs/THREAT_MODEL.md`
+- `docs/MUSICAL_GLOSSARY.md`
 
 ## Main folders
 

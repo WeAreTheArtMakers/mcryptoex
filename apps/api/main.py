@@ -13,8 +13,10 @@ from fastapi.responses import ORJSONResponse
 from prometheus_client import Counter, make_asgi_app
 from pydantic import BaseModel, Field
 
+from .compliance import enforce_optional_compliance
 from .config import get_settings
 from .proto_codec import ProtoCodec
+from .quote_engine import build_quote
 
 settings = get_settings()
 
@@ -128,32 +130,18 @@ async def quote(
     token_in: str,
     token_out: str,
     amount_in: Decimal,
-    slippage_bps: int = Query(default=50, ge=1, le=3000)
+    slippage_bps: int = Query(default=50, ge=1, le=3000),
+    wallet_address: str | None = Query(default=None),
+    country_code: str | None = Query(default=None, min_length=2, max_length=2)
 ) -> dict:
-    rate = Decimal('1')
-    if token_in != token_out:
-        if token_in == 'mUSD':
-            rate = Decimal('0.0003') if token_out in {'WETH', 'WSOL'} else Decimal('0.00002')
-        elif token_out == 'mUSD':
-            rate = Decimal('3300') if token_in in {'WETH', 'WSOL'} else Decimal('52000')
-        else:
-            rate = Decimal('0.06')
-
-    expected_out = amount_in * rate
-    min_out = expected_out * (Decimal(10_000 - slippage_bps) / Decimal(10_000))
-    route = [token_in, token_out] if 'mUSD' in {token_in, token_out} else [token_in, 'mUSD', token_out]
-
-    return {
-        'chain_id': chain_id,
-        'token_in': token_in,
-        'token_out': token_out,
-        'amount_in': str(amount_in),
-        'expected_out': str(expected_out),
-        'min_out': str(min_out),
-        'slippage_bps': slippage_bps,
-        'route': route,
-        'engine': 'harmony-engine-v2'
-    }
+    enforce_optional_compliance(country_code=country_code, wallet_address=wallet_address)
+    return build_quote(
+        chain_id=chain_id,
+        token_in=token_in,
+        token_out=token_out,
+        amount_in=amount_in,
+        slippage_bps=slippage_bps
+    )
 
 
 @app.get('/pairs')
@@ -268,6 +256,7 @@ async def analytics(minutes: int = Query(default=60, ge=1, le=1440)) -> dict:
 @app.post('/debug/emit-swap-note')
 async def emit_swap_note(req: EmitSwapRequest) -> dict:
     assert _producer is not None and _codec is not None
+    enforce_optional_compliance(wallet_address=req.user_address)
 
     note_id = str(uuid.uuid4())
     correlation_id = str(uuid.uuid4())
