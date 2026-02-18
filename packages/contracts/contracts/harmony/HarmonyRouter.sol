@@ -55,6 +55,7 @@ contract HarmonyRouter is Ownable2Step, Pausable, ReentrancyGuard {
     error InsufficientBAmount(uint256 expectedMin, uint256 actual);
     error InsufficientOutput(uint256 expectedMin, uint256 actual);
     error InvalidPathLength(uint8 pathLength);
+    error TransferFromFailed();
 
     modifier ensure(uint256 deadline) {
         if (deadline < block.timestamp) revert Expired(deadline, block.timestamp);
@@ -102,7 +103,9 @@ contract HarmonyRouter is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 deadline
     ) external ensure(deadline) whenNotPaused nonReentrant returns (uint256 amountA, uint256 amountB) {
         address pair = HarmonyLibrary.pairFor(factory, tokenA, tokenB);
-        IHarmonyPair(pair).transferFrom(msg.sender, pair, liquidity);
+        if (!IHarmonyPair(pair).transferFrom(msg.sender, pair, liquidity)) {
+            revert TransferFromFailed();
+        }
 
         (uint256 amount0, uint256 amount1) = IHarmonyPair(pair).burn(to);
         (address token0, ) = HarmonyLibrary.sortTokens(tokenA, tokenB);
