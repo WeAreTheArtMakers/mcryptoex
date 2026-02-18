@@ -1,0 +1,9 @@
+{
+  "networkName": "Ethereum Sepolia",
+  "chainId": 11155111,
+  "rpcEnvKey": "SEPOLIA_RPC_URL",
+  "collateralToken": "",
+  "oracleAddress": "",
+  "collateralMinPriceE18": "500000000000000000",
+  "collateralMaxPriceE18": "2000000000000000000"
+}

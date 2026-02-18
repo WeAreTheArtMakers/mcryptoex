@@ -1,0 +1,9 @@
+{
+  "networkName": "BNB Smart Chain Testnet",
+  "chainId": 97,
+  "rpcEnvKey": "BSC_TESTNET_RPC_URL",
+  "collateralToken": "",
+  "oracleAddress": "",
+  "collateralMinPriceE18": "500000000000000000",
+  "collateralMaxPriceE18": "2000000000000000000"
+}
