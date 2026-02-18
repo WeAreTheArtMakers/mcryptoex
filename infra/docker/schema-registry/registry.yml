@@ -1,0 +1,2 @@
+# Redpanda built-in schema registry is used in Phase 1.
+# This file is kept as a placeholder for future external registry overrides.

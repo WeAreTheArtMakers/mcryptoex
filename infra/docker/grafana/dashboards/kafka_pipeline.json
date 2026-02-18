@@ -1,0 +1,38 @@
+{
+  "id": null,
+  "uid": "poly-kafka-pipeline",
+  "title": "Kafka Pipeline",
+  "tags": ["polyphony", "kafka"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Validator Throughput",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(polyphony_tx_validated_total[1m])) by (workspace_id)",
+          "legendFormat": "{{workspace_id}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "DLQ Events / sec",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(polyphony_dlq_messages_total[1m])) by (stage, topic)",
+          "legendFormat": "{{stage}}/{{topic}}"
+        }
+      ]
+    }
+  ]
+}

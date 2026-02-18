@@ -1,0 +1,25 @@
+{
+  "id": null,
+  "uid": "poly-clickhouse-analytics",
+  "title": "ClickHouse Analytics Writer",
+  "tags": ["polyphony", "clickhouse"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "ClickHouse Insert p95",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(polyphony_clickhouse_insert_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": null,
+  "uid": "poly-ledger-kpis",
+  "title": "Ledger KPIs",
+  "tags": ["polyphony", "ledger"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Ledger Entries Written / sec",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(polyphony_ledger_entries_written_total[1m])) by (asset)",
+          "legendFormat": "{{asset}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Balance Upserts / sec",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(polyphony_balance_upserts_total[1m])) by (asset)",
+          "legendFormat": "{{asset}}"
+        }
+      ]
+    }
+  ]
+}

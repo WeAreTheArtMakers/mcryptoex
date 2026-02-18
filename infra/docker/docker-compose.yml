@@ -1,0 +1,213 @@
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.3.7
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --check=false
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092,OUTSIDE://localhost:${REDPANDA_KAFKA_PORT}
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=redpanda:8082
+      - --schema-registry-addr=0.0.0.0:8081
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - '${REDPANDA_KAFKA_PORT}:19092'
+      - '${REDPANDA_SCHEMA_PORT}:8081'
+      - '${REDPANDA_METRICS_PORT}:9644'
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ['CMD-SHELL', 'rpk cluster info --brokers localhost:9092 >/dev/null 2>&1']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redpanda-init:
+    image: redpandadata/redpanda:v24.3.7
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - >
+        set -euo pipefail;
+        for i in $(seq 1 30); do
+          rpk cluster info --brokers redpanda:9092 >/dev/null 2>&1 && break;
+          sleep 2;
+        done;
+        rpk topic create dex_tx_raw --brokers redpanda:9092 -p 6 -r 1 || true;
+        rpk topic create dex_tx_valid --brokers redpanda:9092 -p 6 -r 1 || true;
+        rpk topic create dex_ledger_entries --brokers redpanda:9092 -p 12 -r 1 || true;
+        rpk topic create dex_outbox --brokers redpanda:9092 -p 6 -r 1 || true;
+        rpk topic create dex_dlq --brokers redpanda:9092 -p 3 -r 1 || true
+
+  redpanda-console:
+    image: redpandadata/console:v2.8.7
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_SCHEMAREGISTRY_ENABLED: 'true'
+      KAFKA_SCHEMAREGISTRY_URLS: http://redpanda:8081
+    ports:
+      - '${REDPANDA_CONSOLE_PORT}:8080'
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - '${POSTGRES_PORT}:5432'
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./services/ledger-writer/db/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+    ports:
+      - '${CLICKHOUSE_HTTP_PORT}:8123'
+      - '${CLICKHOUSE_NATIVE_PORT}:9000'
+    volumes:
+      - ch-data:/var/lib/clickhouse
+      - ./services/ledger-writer/clickhouse/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'clickhouse-client --user "$${CLICKHOUSE_USER}" --password "$${CLICKHOUSE_PASSWORD}" --query "SELECT 1"']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.63.0
+    ports:
+      - '${JAEGER_PORT}:16686'
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.121.0
+    command: ['--config=/etc/otelcol-contrib/config.yaml']
+    volumes:
+      - ./infra/docker/otel/otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - '${OTEL_GRPC_PORT}:4317'
+      - '${OTEL_HTTP_PORT}:4318'
+    depends_on:
+      - jaeger
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    environment:
+      SERVICE_NAME: tempo-api
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    ports:
+      - '${API_PORT}:8000'
+
+  indexer:
+    build:
+      context: .
+      dockerfile: services/indexer/Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: indexer
+
+  validator:
+    build:
+      context: .
+      dockerfile: services/validator/Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: validator
+
+  ledger-writer:
+    build:
+      context: .
+      dockerfile: services/ledger-writer/Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      SERVICE_NAME: ledger-writer
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      - api
+    ports:
+      - '${WEB_PORT}:80'
+
+  prometheus:
+    image: prom/prometheus:v3.3.1
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./infra/docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - '${PROMETHEUS_PORT}:9090'
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - ./infra/docker/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./infra/docker/grafana/provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./infra/docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - '${GRAFANA_PORT}:3000'
+    depends_on:
+      - prometheus
+
+volumes:
+  redpanda-data:
+  pg-data:
+  ch-data:

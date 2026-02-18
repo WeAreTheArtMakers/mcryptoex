@@ -1,0 +1,25 @@
+# Env files
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules
+.pnpm-store
+.next
+dist
+build
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Docker
+*.log
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,64 @@
+{
+  "id": null,
+  "uid": "poly-api-metrics",
+  "title": "API Metrics",
+  "tags": ["polyphony", "api"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 2,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP Requests / sec",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(polyphony_http_requests_total[1m])) by (path)",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "TX Ingested / sec",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(polyphony_tx_ingested_total[1m])) by (version)",
+          "legendFormat": "{{version}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Frontend Client Errors / 5m",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(polyphony_frontend_client_errors_total[5m])) by (kind)",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Poor Web Vitals / 10m",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(polyphony_frontend_web_vitals_total{rating=\"poor\"}[10m])) by (metric)",
+          "legendFormat": "{{metric}}"
+        }
+      ]
+    }
+  ]
+}

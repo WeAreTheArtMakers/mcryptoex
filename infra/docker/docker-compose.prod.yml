@@ -1,0 +1,32 @@
+services:
+  api:
+    environment:
+      ENVIRONMENT: prod
+    ports: []
+    expose:
+      - '8000'
+
+  web:
+    ports: []
+    expose:
+      - '80'
+
+  grafana:
+    ports: []
+    expose:
+      - '3000'
+
+  prometheus:
+    ports: []
+    expose:
+      - '9090'
+
+  redpanda-console:
+    ports: []
+    expose:
+      - '8080'
+
+  jaeger:
+    ports: []
+    expose:
+      - '16686'
