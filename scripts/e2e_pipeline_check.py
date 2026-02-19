@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -66,7 +67,7 @@ def main() -> None:
     payload = {
         'chain_id': 31337,
         'tx_hash': tx_hash,
-        'user_address': '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+        'user_address': os.getenv('E2E_USER_ADDRESS', '0x1000000000000000000000000000000000000001'),
         'pool_address': '0x1111111111111111111111111111111111111111',
         'token_in': 'mUSD',
         'token_out': 'WETH',

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -46,7 +47,7 @@ _codec: ProtoCodec | None = None
 class EmitSwapRequest(BaseModel):
     chain_id: int = 31337
     tx_hash: str = Field(default_factory=lambda: f"0x{uuid.uuid4().hex}{uuid.uuid4().hex[:32]}")
-    user_address: str = '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
+    user_address: str = os.getenv('DEBUG_EMIT_USER_ADDRESS', '0x1000000000000000000000000000000000000001')
     pool_address: str = '0x1111111111111111111111111111111111111111'
     token_in: str = 'mUSD'
     token_out: str = 'WETH'
