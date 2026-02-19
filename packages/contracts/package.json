@@ -10,6 +10,8 @@
     "deploy:local": "hardhat run scripts/deploy-local.ts",
     "deploy:sepolia": "hardhat run scripts/deploy-testnets.ts --network sepolia",
     "deploy:bscTestnet": "hardhat run scripts/deploy-testnets.ts --network bscTestnet",
+    "bootstrap:liquidity:sepolia": "hardhat run scripts/bootstrap-liquidity.ts --network sepolia",
+    "bootstrap:liquidity:bscTestnet": "hardhat run scripts/bootstrap-liquidity.ts --network bscTestnet",
     "handoff:admin": "hardhat run scripts/handoff-admin.ts"
   },
   "devDependencies": {

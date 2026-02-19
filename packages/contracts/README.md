@@ -39,6 +39,19 @@ npm run deploy:sepolia
 npm run deploy:bscTestnet
 ```
 
+Bootstrap first mUSD/stable pool liquidity (after deploy):
+
+```bash
+# optional amounts:
+# BOOTSTRAP_MINT_COLLATERAL_AMOUNT=100
+# BOOTSTRAP_LP_COLLATERAL_AMOUNT=50
+# BOOTSTRAP_LP_MUSD_AMOUNT=50
+npm run bootstrap:liquidity:sepolia
+npm run bootstrap:liquidity:bscTestnet
+```
+
+This script mints mUSD via `Stabilizer` and adds first `mUSD <-> collateral` liquidity so `/quote` can return real on-chain routes.
+
 Deployment writes:
 
 - `packages/contracts/deploy/address-registry.sepolia.json`

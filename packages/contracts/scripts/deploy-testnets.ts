@@ -38,6 +38,11 @@ function parseCsv(value: string | undefined): string[] {
 }
 
 function stableBoundsE18(deviationBps: bigint): { min: string; max: string } {
+  if (deviationBps > 200n) {
+    throw new Error(
+      `STABLE_COLLATERAL_MAX_DEVIATION_BPS exceeds allowed max (200 bps = 2%): ${deviationBps.toString()}`
+    );
+  }
   if (deviationBps >= 10_000n) {
     throw new Error(`invalid STABLE_COLLATERAL_MAX_DEVIATION_BPS=${deviationBps.toString()}`);
   }

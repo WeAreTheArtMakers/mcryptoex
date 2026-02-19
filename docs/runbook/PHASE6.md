@@ -36,6 +36,18 @@ Outputs:
 
 `deploy-testnets.ts` configures USDC/USDT collateral with 1.00 +/- 2.00% oracle band by default.
 
+## Bootstrap first pool liquidity (required for `/quote` on testnets)
+
+After deploy, initialize at least one `mUSD` pair (e.g. `mUSD/USDC`):
+
+```bash
+cd packages/contracts
+npm run bootstrap:liquidity:sepolia
+npm run bootstrap:liquidity:bscTestnet
+```
+
+Without liquidity, testnet `/quote` intentionally returns `404 no on-chain liquidity route`.
+
 ## Generate registry
 
 ```bash
