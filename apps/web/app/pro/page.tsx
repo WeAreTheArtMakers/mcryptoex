@@ -1,11 +1,10 @@
-import { Suspense } from 'react';
+import dynamic from 'next/dynamic';
 
-import { ProTerminal } from './pro-terminal';
+const ProTerminal = dynamic(() => import('./pro-terminal').then((mod) => mod.ProTerminal), {
+  ssr: false,
+  loading: () => <div className="min-h-screen bg-[#06111d]" />
+});
 
 export default function ProPage() {
-  return (
-    <Suspense fallback={<div className="min-h-screen bg-[#06111d]" />}>
-      <ProTerminal />
-    </Suspense>
-  );
+  return <ProTerminal />;
 }

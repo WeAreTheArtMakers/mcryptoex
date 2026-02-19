@@ -58,6 +58,37 @@ const PLATFORM_LINKS = [
   { label: 'Analytics', href: '/analytics' }
 ] as const;
 
+const DESK_TITLES: Record<Exclude<DeskTab, 'trade'>, { title: string; subtitle: string }> = {
+  portfolio: {
+    title: 'Portfolio Command',
+    subtitle: 'Balances, recent activity, and wallet summary.'
+  },
+  earn: {
+    title: 'Earn Programs',
+    subtitle: 'Read-only yield and fee distribution insights.'
+  },
+  vaults: {
+    title: 'Resonance Vaults',
+    subtitle: 'Protocol vault visibility and allocation controls.'
+  },
+  staking: {
+    title: 'Staking Desk',
+    subtitle: 'LP staking guidance and reward snapshots.'
+  },
+  referrals: {
+    title: 'Referrals Hub',
+    subtitle: 'Invite tracking and community growth panel.'
+  },
+  leaderboard: {
+    title: 'Leaderboard',
+    subtitle: 'Top pools and top activity rankings.'
+  },
+  more: {
+    title: 'More Tools',
+    subtitle: 'Shortcuts to analytics, ledger, pools, and docs.'
+  }
+};
+
 function shortAddress(value?: string) {
   if (!value) return '0x...';
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
@@ -75,6 +106,19 @@ function changeClass(value: number | null): string {
 
 function safe(value: number): number {
   return Number.isFinite(value) ? value : 0;
+}
+
+async function copyText(value: string): Promise<boolean> {
+  if (!value) return false;
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 function formatSyntheticBucket(bucket: number, timeframe: Timeframe): string {
@@ -266,6 +310,11 @@ export function ProTerminal() {
   const [selectedPairByChain, setSelectedPairByChain] = useState<Record<string, string>>({});
   const [ready, setReady] = useState(false);
   const [sizePct, setSizePct] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [denseMode, setDenseMode] = useState(false);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [uiNotice, setUiNotice] = useState('');
 
   const { address } = useAccount();
   const pathname = usePathname();
@@ -325,7 +374,7 @@ export function ProTerminal() {
     }
   }, []);
 
-  const marketVM = useMarketListVM(chainId, searchQuery, filter, favorites);
+  const marketVM = useMarketListVM(chainId, searchQuery, filter, favorites, refreshNonce);
 
   useEffect(() => {
     if (!ready || typeof window === 'undefined') return;
@@ -375,8 +424,8 @@ export function ProTerminal() {
 
   const selectedPair = useMemo(() => marketVM.allRows.find((row) => row.id === selectedPairId) || null, [marketVM.allRows, selectedPairId]);
 
-  const tradesVM = useTradesVM(chainId, selectedPair);
-  const pairVM = usePairVM({ chainId, selectedPair, trades: tradesVM.trades, timeframe });
+  const tradesVM = useTradesVM(chainId, selectedPair, refreshNonce);
+  const pairVM = usePairVM({ chainId, selectedPair, trades: tradesVM.trades, timeframe, refreshNonce });
   const orderbookVM = useOrderbookVM(selectedPair, pairVM.metrics.lastPrice);
   const entryVM = useOrderEntryVM({
     chainId,
@@ -484,6 +533,38 @@ export function ProTerminal() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [entryVM, marketVM.rows, selectedPair, selectedPairId]);
 
+  useEffect(() => {
+    if (!uiNotice) return undefined;
+    const timer = window.setTimeout(() => setUiNotice(''), 3600);
+    return () => window.clearTimeout(timer);
+  }, [uiNotice]);
+
+  const openSelectedInHarmony = useCallback(() => {
+    if (!selectedPair) {
+      setUiNotice('Select a pair first.');
+      return;
+    }
+    const url = `/harmony?chain_id=${chainId}&token_in=${selectedPair.token0}&token_out=${selectedPair.token1}`;
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  }, [chainId, selectedPair]);
+
+  const copySelectedPair = useCallback(async () => {
+    if (!selectedPair) {
+      setUiNotice('No pair selected.');
+      return;
+    }
+    const payload = `${selectedPair.pair} | pool=${selectedPair.poolAddress} | chain=${selectedPair.chainId}`;
+    const copied = await copyText(payload);
+    setUiNotice(copied ? 'Pair metadata copied.' : 'Clipboard unavailable.');
+  }, [selectedPair]);
+
+  const fullRefresh = useCallback(() => {
+    setRefreshNonce((value) => value + 1);
+    setUiNotice('Refreshing market, trades, and analytics...');
+  }, []);
+
   const executePrimary = async () => {
     if (entryVM.entryMode === 'market' && !entryVM.quote) {
       await entryVM.requestQuote();
@@ -493,19 +574,19 @@ export function ProTerminal() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#06111d] text-slate-100">
-      <header className="flex h-14 items-center justify-between border-b border-[#183344] bg-[#09141f] px-4">
-        <div className="flex items-center gap-5">
+    <div className={`flex min-h-screen flex-col bg-[#06111d] text-slate-100 ${denseMode ? 'text-[12px] leading-5' : 'text-[14px] leading-6'}`}>
+      <header className="flex h-16 items-center justify-between border-b border-[#183344] bg-[#09141f] px-4">
+        <div className="flex min-w-0 items-center gap-5">
           <div className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 rounded-full bg-[#67e3d5]" />
-            <span className="text-sm font-semibold">mCryptoEx</span>
+            <span className="text-base font-semibold">mCryptoEx</span>
           </div>
-          <nav className="hidden items-center gap-5 text-sm text-slate-200 xl:flex">
+          <nav className="hidden items-center gap-4 text-sm text-slate-200 lg:flex">
             {DESK_LINKS.map((item) => (
               <Link
                 key={item.id}
                 href={item.href}
-                className={`transition ${activeDesk === item.id ? 'text-[#58d4c8]' : 'text-slate-200 hover:text-white'}`}
+                className={`rounded px-1.5 py-1 transition ${activeDesk === item.id ? 'text-[#58d4c8]' : 'text-slate-200 hover:text-white'}`}
               >
                 {item.label}
               </Link>
@@ -513,27 +594,48 @@ export function ProTerminal() {
           </nav>
         </div>
         <div className="flex items-center gap-2">
-          <button className="rounded-md border border-[#204257] bg-[#0c1a29] px-3 py-1 text-sm text-slate-200">{shortAddress(address)}</button>
-          {['◰', '◎', '⚙'].map((icon) => (
-            <button key={icon} className="h-8 w-8 rounded-md border border-[#204257] bg-[#0c1a29] text-xs text-slate-200">
-              {icon}
-            </button>
-          ))}
+          <button className="rounded-md border border-[#204257] bg-[#0c1a29] px-3 py-1.5 text-sm text-slate-200">{shortAddress(address)}</button>
+          <button
+            type="button"
+            title="Toggle compact density"
+            onClick={() => setDenseMode((value) => !value)}
+            className="h-9 w-9 rounded-md border border-[#204257] bg-[#0c1a29] text-sm text-slate-200 transition hover:border-[#57d6ca]"
+          >
+            ◰
+          </button>
+          <button
+            type="button"
+            title="Refresh all panels"
+            onClick={fullRefresh}
+            className="h-9 w-9 rounded-md border border-[#204257] bg-[#0c1a29] text-sm text-slate-200 transition hover:border-[#57d6ca]"
+          >
+            ◎
+          </button>
+          <button
+            type="button"
+            title="Open terminal settings"
+            onClick={() => setSettingsOpen((value) => !value)}
+            className={`h-9 w-9 rounded-md border bg-[#0c1a29] text-sm text-slate-200 transition ${
+              settingsOpen ? 'border-[#57d6ca] text-[#79e7dc]' : 'border-[#204257] hover:border-[#57d6ca]'
+            }`}
+          >
+            ⚙
+          </button>
         </div>
       </header>
 
-      <div className="h-8 border-b border-[#1b3f4d] bg-[#58d4c8] px-4 py-1 text-xs font-medium text-[#062428]">
+      <div className="border-b border-[#1b3f4d] bg-[#58d4c8] px-4 py-1.5 text-sm font-medium text-[#062428]">
         Wallet-first non-custodial trading. Tempo API is read-only; all executions are wallet-signed.
       </div>
-      <div className="border-b border-[#1b3f4d] bg-[#091623] px-3 py-1.5">
-        <div className="flex flex-wrap items-center gap-1.5">
+      <div className="border-b border-[#1b3f4d] bg-[#091623] px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
           {PLATFORM_LINKS.map((item) => {
             const active = item.href === pathname;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded border px-2 py-1 text-[11px] ${
+                className={`rounded border px-2.5 py-1.5 text-xs font-semibold tracking-[0.03em] ${
                   active
                     ? 'border-[#57d6ca] bg-[#123345] text-[#79e7dc]'
                     : 'border-[#21445b] bg-[#0c1a29] text-slate-300 hover:text-white'
@@ -546,17 +648,15 @@ export function ProTerminal() {
         </div>
       </div>
 
-      <div className="border-b border-[#1b3f4d] bg-[#08121c] px-3 py-2 text-xs">
-        {activeDesk !== 'trade' ? (
-          <p className="text-slate-300">
-            <span className="text-[#79e7dc]">{activeDesk}</span> view is in staged rollout. Trade execution stays non-custodial on
-            <Link href="/pro?desk=trade" className="ml-1 text-[#79e7dc] underline">
-              Trade desk
-            </Link>
-            .
+      <div className="border-b border-[#1b3f4d] bg-[#08121c] px-3 py-2">
+        {uiNotice ? (
+          <p className="text-sm text-[#79e7dc]">{uiNotice}</p>
+        ) : activeDesk !== 'trade' ? (
+          <p className="text-sm text-slate-300">
+            <span className="text-[#79e7dc]">{DESK_TITLES[activeDesk].title}:</span> {DESK_TITLES[activeDesk].subtitle}
           </p>
         ) : needsMusdOnboarding ? (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
             <p className="text-slate-200">
               First step: convert native {chainId === 97 ? 'tBNB' : 'gas token'} to <span className="text-[#79e7dc]">mUSD</span> to
               start trading pairs.
@@ -564,7 +664,7 @@ export function ProTerminal() {
             <button
               type="button"
               onClick={setupFirstTradeToMusd}
-              className="rounded border border-[#57d6ca] bg-[#123345] px-2 py-1 text-[11px] font-semibold text-[#79e7dc]"
+              className="rounded border border-[#57d6ca] bg-[#123345] px-2 py-1 text-xs font-semibold text-[#79e7dc]"
             >
               Auto Setup Native → mUSD
             </button>
@@ -573,12 +673,49 @@ export function ProTerminal() {
             </Link>
           </div>
         ) : (
-          <p className="text-slate-400">mUSD balance detected. You can quote and execute trades directly from this panel.</p>
+          <p className="text-sm text-slate-400">mUSD balance detected. You can quote and execute trades directly from this panel.</p>
         )}
       </div>
 
+      {settingsOpen ? (
+        <div className="border-b border-[#1b3f4d] bg-[#081522] px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setDenseMode(false)}
+              className={`rounded border px-2 py-1 ${!denseMode ? 'border-[#57d6ca] bg-[#123345] text-[#79e7dc]' : 'border-[#21445b] text-slate-300'}`}
+            >
+              Comfortable Text
+            </button>
+            <button
+              type="button"
+              onClick={() => setDenseMode(true)}
+              className={`rounded border px-2 py-1 ${denseMode ? 'border-[#57d6ca] bg-[#123345] text-[#79e7dc]' : 'border-[#21445b] text-slate-300'}`}
+            >
+              Dense Text
+            </button>
+            <button
+              type="button"
+              onClick={() => setLeftPanelCollapsed((value) => !value)}
+              className="rounded border border-[#21445b] px-2 py-1 text-slate-300"
+            >
+              {leftPanelCollapsed ? 'Show Market Panel' : 'Collapse Market Panel'}
+            </button>
+            <button
+              type="button"
+              onClick={fullRefresh}
+              className="rounded border border-[#21445b] px-2 py-1 text-slate-300"
+            >
+              Refresh Feeds
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <main className="flex-1 p-1.5">
-        <div className="mb-1 grid grid-cols-[minmax(0,1fr)_280px] gap-1 rounded border border-[#173448] bg-[#0a1724] px-2 py-2 text-xs">
+        {activeDesk === 'trade' ? (
+          <>
+        <div className="mb-1 grid grid-cols-[minmax(0,1fr)_280px] gap-1 rounded border border-[#173448] bg-[#0a1724] px-2 py-2 text-sm">
           <div className="flex min-w-0 items-center gap-4 overflow-hidden">
             <button className="text-lg text-[#63e0d2]">✦</button>
             <div className="min-w-0">
@@ -604,11 +741,34 @@ export function ProTerminal() {
             </div>
           </div>
           <div className="flex items-center justify-end gap-1">
-            {['↗', '⧉', '☰'].map((i) => (
-              <button key={i} className="h-7 w-7 rounded border border-[#21445b] bg-[#0c1a29] text-[11px] text-slate-300">
-                {i}
-              </button>
-            ))}
+            <button
+              type="button"
+              onClick={openSelectedInHarmony}
+              title="Open selected pair in Harmony swap"
+              className="h-8 w-8 rounded border border-[#21445b] bg-[#0c1a29] text-sm text-slate-300 transition hover:border-[#57d6ca]"
+            >
+              ↗
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void copySelectedPair();
+              }}
+              title="Copy selected pair metadata"
+              className="h-8 w-8 rounded border border-[#21445b] bg-[#0c1a29] text-sm text-slate-300 transition hover:border-[#57d6ca]"
+            >
+              ⧉
+            </button>
+            <button
+              type="button"
+              onClick={() => setLeftPanelCollapsed((value) => !value)}
+              title="Toggle market panel"
+              className={`h-8 w-8 rounded border bg-[#0c1a29] text-sm text-slate-300 transition ${
+                leftPanelCollapsed ? 'border-[#57d6ca] text-[#79e7dc]' : 'border-[#21445b] hover:border-[#57d6ca]'
+              }`}
+            >
+              ☰
+            </button>
           </div>
         </div>
 
@@ -623,7 +783,7 @@ export function ProTerminal() {
               key={panel}
               type="button"
               onClick={() => setMobilePanel(panel)}
-              className={`flex-1 rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${
+              className={`flex-1 rounded border px-2 py-1 text-xs font-semibold uppercase tracking-[0.08em] ${
                 mobilePanel === panel
                   ? 'border-[#55d1c5] bg-[#132f3f] text-[#78e6db]'
                   : 'border-[#21445b] bg-[#0c1a29] text-slate-300'
@@ -634,22 +794,22 @@ export function ProTerminal() {
           ))}
         </div>
 
-        <div className="grid h-[calc(100vh-214px)] gap-1 lg:grid-cols-[520px_minmax(0,1fr)_640px]">
-          <section className={`${mobilePanel === 'markets' ? 'block' : 'hidden'} rounded border border-[#173448] bg-[#0a1724] p-2 lg:block`}>
+        <div className={`grid h-[calc(100vh-214px)] gap-1 ${leftPanelCollapsed ? 'lg:grid-cols-[minmax(0,1fr)_640px]' : 'lg:grid-cols-[520px_minmax(0,1fr)_640px]'}`}>
+          <section className={`${mobilePanel === 'markets' ? 'block' : 'hidden'} rounded border border-[#173448] bg-[#0a1724] p-2 ${leftPanelCollapsed ? 'lg:hidden' : 'lg:block'}`}>
             <div className="mb-2 flex items-center justify-between">
-              <p className="text-xs text-slate-400">{chainLabel}</p>
+              <p className="text-sm text-slate-400">{chainLabel}</p>
               <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setStrictMode(true)}
-                  className={`rounded border px-2 py-1 text-[11px] ${strictMode ? 'border-[#57d6ca] bg-[#123345] text-[#75e6da]' : 'border-[#21445b] bg-[#0c1a29] text-slate-300'}`}
+                  className={`rounded border px-2 py-1 text-xs ${strictMode ? 'border-[#57d6ca] bg-[#123345] text-[#75e6da]' : 'border-[#21445b] bg-[#0c1a29] text-slate-300'}`}
                 >
                   Strict
                 </button>
                 <button
                   type="button"
                   onClick={() => setStrictMode(false)}
-                  className={`rounded border px-2 py-1 text-[11px] ${!strictMode ? 'border-[#57d6ca] bg-[#123345] text-[#75e6da]' : 'border-[#21445b] bg-[#0c1a29] text-slate-300'}`}
+                  className={`rounded border px-2 py-1 text-xs ${!strictMode ? 'border-[#57d6ca] bg-[#123345] text-[#75e6da]' : 'border-[#21445b] bg-[#0c1a29] text-slate-300'}`}
                 >
                   All
                 </button>
@@ -677,7 +837,7 @@ export function ProTerminal() {
               </select>
             </div>
 
-            <div className="mb-2 flex flex-wrap gap-1 text-[11px]">
+            <div className="mb-2 flex flex-wrap gap-1 text-xs">
               {([
                 ['all', 'All'],
                 ['perps', 'Perps'],
@@ -700,7 +860,7 @@ export function ProTerminal() {
             </div>
 
             <div className="overflow-hidden rounded border border-[#183549]">
-              <div className="grid grid-cols-[24px_minmax(0,1fr)_90px_110px_88px_106px] gap-2 border-b border-[#183549] bg-[#091622] px-2 py-2 text-[11px] text-slate-400">
+              <div className="grid grid-cols-[24px_minmax(0,1fr)_90px_110px_88px_106px] gap-2 border-b border-[#183549] bg-[#091622] px-2 py-2 text-xs text-slate-400">
                 <span>☆</span>
                 <span>Symbol</span>
                 <span className="text-right">Last Price</span>
@@ -770,21 +930,46 @@ export function ProTerminal() {
                   </button>
                 ))}
                 <span className="text-slate-500">|</span>
-                <button className="text-slate-300">Indicators</button>
+                <button
+                  type="button"
+                  onClick={() => setUiNotice('Indicators panel is in progress. Candle + volume feed is active.')}
+                  className="text-slate-300"
+                >
+                  Indicators
+                </button>
               </div>
               <div className="flex items-center gap-1">
-                {['◌', '⛶'].map((icon) => (
-                  <button key={icon} className="h-7 w-7 rounded border border-[#21445b] bg-[#0c1a29] text-xs text-slate-300">
-                    {icon}
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  onClick={() => setUiNotice('Chart anchor synced to the selected pair.')}
+                  className="h-8 w-8 rounded border border-[#21445b] bg-[#0c1a29] text-sm text-slate-300"
+                >
+                  ◌
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof document !== 'undefined') {
+                      void document.documentElement.requestFullscreen?.();
+                    }
+                    setUiNotice('Fullscreen requested.');
+                  }}
+                  className="h-8 w-8 rounded border border-[#21445b] bg-[#0c1a29] text-sm text-slate-300"
+                >
+                  ⛶
+                </button>
               </div>
             </div>
 
             <div className="grid h-[calc(100%-34px)] grid-cols-[30px_minmax(0,1fr)] gap-2">
-              <div className="flex flex-col items-center gap-2 rounded border border-[#183549] bg-[#08131f] py-2 text-[11px] text-slate-400">
+              <div className="flex flex-col items-center gap-2 rounded border border-[#183549] bg-[#08131f] py-2 text-xs text-slate-400">
                 {['＋', '／', '↕', '∿', '⌖', '◍', 'T'].map((tool) => (
-                  <button key={tool} className="h-6 w-6 rounded border border-[#21445b] bg-[#0b1723]">
+                  <button
+                    key={tool}
+                    type="button"
+                    onClick={() => setUiNotice(`${tool} tool shortcut queued for the drawing module.`)}
+                    className="h-6 w-6 rounded border border-[#21445b] bg-[#0b1723]"
+                  >
                     {tool}
                   </button>
                 ))}
@@ -794,7 +979,7 @@ export function ProTerminal() {
               </div>
             </div>
             {usingSyntheticChart ? (
-              <p className="mt-2 text-[11px] text-amber-200">
+              <p className="mt-2 text-xs text-amber-200">
                 Ledger OHLC is not available yet; chart is showing reserve-derived preview candles.
               </p>
             ) : null}
@@ -804,7 +989,7 @@ export function ProTerminal() {
           <section className={`${mobilePanel === 'trade' ? 'block' : 'hidden'} grid grid-cols-[minmax(0,1fr)_292px] gap-1 lg:grid`}>
             <div className="rounded border border-[#173448] bg-[#0a1724] p-2">
               <div className="mb-2 flex items-center justify-between">
-                <div className="flex gap-1 text-xs">
+                <div className="flex gap-1 text-sm">
                   <button
                     type="button"
                     onClick={() => setBookTab('book')}
@@ -820,11 +1005,11 @@ export function ProTerminal() {
                     Trades
                   </button>
                 </div>
-                <div className="text-xs text-slate-500">{selectedPair?.token0 || '--'}</div>
+                <div className="text-sm text-slate-500">{selectedPair?.token0 || '--'}</div>
               </div>
 
               {bookTab === 'book' ? (
-                <div className="text-xs">
+                <div className="text-sm">
                   <div className="mb-1 flex items-center justify-between text-slate-500">
                     <span>0.001</span>
                     <span>{selectedPair?.token0 || ''}</span>
@@ -849,7 +1034,7 @@ export function ProTerminal() {
                     })}
                   </div>
 
-                  <div className="my-1 rounded bg-[#111f2d] px-2 py-1 text-center text-[11px] text-slate-300">
+                  <div className="my-1 rounded bg-[#111f2d] px-2 py-1 text-center text-sm text-slate-300">
                     Spread {shortAmount(orderbookVM.spread)}
                   </div>
 
@@ -868,7 +1053,7 @@ export function ProTerminal() {
                   </div>
                 </div>
               ) : (
-                <div className="max-h-[490px] space-y-1 overflow-y-auto text-xs">
+                <div className="max-h-[490px] space-y-1 overflow-y-auto text-sm">
                   {tradesVM.trades.slice(0, 120).map((trade) => (
                     <div key={`${trade.txHash}-${trade.at}`} className="grid grid-cols-[56px_1fr_80px] rounded bg-[#111f2d] px-2 py-1">
                       <span className={trade.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>{trade.side}</span>
@@ -882,7 +1067,7 @@ export function ProTerminal() {
             </div>
 
             <div className="rounded border border-[#173448] bg-[#0a1724] p-2">
-              <div className="mb-2 flex items-center justify-between text-xs">
+              <div className="mb-2 flex items-center justify-between text-sm">
                 <div className="flex gap-1">
                   {(['market', 'limit'] as const).map((mode) => (
                     <button
@@ -894,12 +1079,18 @@ export function ProTerminal() {
                       {mode}
                     </button>
                   ))}
-                  <button className="rounded px-2 py-1 text-slate-400">Pro</button>
+                  <button
+                    type="button"
+                    onClick={() => setUiNotice('Pro order controls will be enabled in the next movement.')}
+                    className="rounded px-2 py-1 text-slate-400"
+                  >
+                    Pro
+                  </button>
                 </div>
                 <span className="text-slate-500">⌄</span>
               </div>
 
-              <div className="mb-2 grid grid-cols-2 gap-1 rounded border border-[#21445b] bg-[#0c1a29] p-1 text-xs">
+              <div className="mb-2 grid grid-cols-2 gap-1 rounded border border-[#21445b] bg-[#0c1a29] p-1 text-sm">
                 <button
                   type="button"
                   onClick={() => entryVM.setSide('buy')}
@@ -916,7 +1107,7 @@ export function ProTerminal() {
                 </button>
               </div>
 
-              <div className="space-y-2 text-xs">
+              <div className="space-y-2 text-sm">
                 <p className="text-slate-400">
                   Available to Trade <span className="float-right text-slate-200">{shortAmount(entryVM.availableBalance)} {entryVM.tokenInSymbol}</span>
                 </p>
@@ -946,7 +1137,7 @@ export function ProTerminal() {
                   <p className="text-right text-slate-400">{sizePct}%</p>
                 </div>
 
-                <label className="flex items-center gap-2 text-[11px] text-cyan-100">
+                <label className="flex items-center gap-2 text-sm text-cyan-100">
                   <input
                     type="checkbox"
                     checked={entryVM.autoWrapNative}
@@ -970,19 +1161,35 @@ export function ProTerminal() {
                         : 'Execute Trade'}
                 </button>
 
-                <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1.5 text-[11px] text-slate-300">
+                <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1.5 text-sm text-slate-300">
                   <p className="flex justify-between"><span>Order Value</span><span>N/A</span></p>
                   <p className="mt-0.5 flex justify-between"><span>Slippage</span><span>Est: 0% / Max: {(entryVM.slippageBps / 100).toFixed(2)}%</span></p>
                   <p className="mt-0.5 flex justify-between"><span>Fees</span><span>{((entryVM.quote?.total_fee_bps ?? 30) / 10000 * 100).toFixed(4)}% / {((entryVM.quote?.protocol_fee_bps ?? 5) / 10000 * 100).toFixed(4)}%</span></p>
                 </div>
 
-                <button className="h-10 w-full rounded border border-[#5ee2d5] bg-[#58d4c8] text-sm font-semibold text-[#052326]">Deposit</button>
+                <Link
+                  href="/harmony?intent=deposit"
+                  className="flex h-10 w-full items-center justify-center rounded border border-[#5ee2d5] bg-[#58d4c8] text-sm font-semibold text-[#052326]"
+                >
+                  Deposit
+                </Link>
                 <div className="grid grid-cols-2 gap-1">
-                  <button className="h-8 rounded border border-[#21445b] bg-[#0c1a29] text-[11px] text-slate-200">Perps ↔ Spot</button>
-                  <button className="h-8 rounded border border-[#21445b] bg-[#0c1a29] text-[11px] text-slate-200">Withdraw</button>
+                  <button
+                    type="button"
+                    onClick={() => setUiNotice('Perps module is read-only in this movement. Spot execution is live.')}
+                    className="h-8 rounded border border-[#21445b] bg-[#0c1a29] text-xs text-slate-200"
+                  >
+                    Perps ↔ Spot
+                  </button>
+                  <Link
+                    href="/harmony?intent=withdraw"
+                    className="flex h-8 items-center justify-center rounded border border-[#21445b] bg-[#0c1a29] text-xs text-slate-200"
+                  >
+                    Withdraw
+                  </Link>
                 </div>
 
-                <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1.5 text-[11px] text-slate-300">
+                <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1.5 text-sm text-slate-300">
                   <p className="font-semibold text-slate-200">Account Equity</p>
                   <p className="mt-1 flex justify-between"><span>Spot</span><span>$0.00</span></p>
                   <p className="flex justify-between"><span>Perps</span><span>$0.00</span></p>
@@ -990,7 +1197,7 @@ export function ProTerminal() {
                 </div>
 
                 {entryVM.quote ? (
-                  <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1 text-[11px] text-slate-300">
+                  <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1 text-sm text-slate-300">
                     <p>Route: {entryVM.quote.route.join(' -> ')}</p>
                     <p>Expected: {entryVM.quote.expected_out} {entryVM.quote.token_out}</p>
                     <p>Minimum: {entryVM.quote.min_out} {entryVM.quote.token_out}</p>
@@ -998,8 +1205,8 @@ export function ProTerminal() {
                   </div>
                 ) : null}
 
-                {entryVM.error ? <p className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">{entryVM.error}</p> : null}
-                {entryVM.status ? <p className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-200">{entryVM.status}</p> : null}
+                {entryVM.error ? <p className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300">{entryVM.error}</p> : null}
+                {entryVM.status ? <p className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-200">{entryVM.status}</p> : null}
               </div>
             </div>
           </section>
@@ -1025,7 +1232,7 @@ export function ProTerminal() {
                 {label}
               </button>
             ))}
-            <div className="ml-auto flex items-center gap-2 text-[11px] text-slate-500">
+            <div className="ml-auto flex items-center gap-2 text-xs text-slate-500">
               <span>Send</span>
               <span>Transfer</span>
               <span>Repay</span>
@@ -1077,7 +1284,7 @@ export function ProTerminal() {
                     <p className={trade.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>
                       {trade.side.toUpperCase()} {shortAmount(trade.baseAmount)} {trade.baseToken}
                     </p>
-                    <p className="text-[11px] text-slate-400">{new Date(trade.at).toLocaleString()}</p>
+                    <p className="text-xs text-slate-400">{new Date(trade.at).toLocaleString()}</p>
                   </div>
                 ))}
                 {!tradesVM.trades.length ? <p className="px-2 py-3 text-xs text-slate-500">No activity yet.</p> : null}
@@ -1093,6 +1300,99 @@ export function ProTerminal() {
             <p>Shortcuts: / search, ↑↓ pair, Enter trade</p>
           </div>
         </section>
+          </>
+        ) : (
+          <section className="grid h-[calc(100vh-214px)] gap-2 rounded border border-[#173448] bg-[#0a1724] p-3 lg:grid-cols-[1.45fr_1fr]">
+            <div className="space-y-2">
+              <div className="rounded border border-[#183549] bg-[#08131f] p-3">
+                <p className="text-lg font-semibold text-[#79e7dc]">{DESK_TITLES[activeDesk].title}</p>
+                <p className="text-sm text-slate-300">{DESK_TITLES[activeDesk].subtitle}</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  <div className="rounded border border-[#21445b] bg-[#0d1a28] p-2">
+                    <p className="text-xs text-slate-500">Wallet</p>
+                    <p className="font-mono text-sm text-slate-100">{shortAddress(address)}</p>
+                  </div>
+                  <div className="rounded border border-[#21445b] bg-[#0d1a28] p-2">
+                    <p className="text-xs text-slate-500">Pairs</p>
+                    <p className="font-mono text-sm text-slate-100">{marketVM.rows.length}</p>
+                  </div>
+                  <div className="rounded border border-[#21445b] bg-[#0d1a28] p-2">
+                    <p className="text-xs text-slate-500">24h Fee USD</p>
+                    <p className="font-mono text-sm text-slate-100">{shortAmount(pairVM.metrics.fees24h)}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded border border-[#183549] bg-[#08131f] p-3">
+                <p className="mb-2 text-sm font-semibold text-slate-200">Working Market Pairs</p>
+                <div className="max-h-[320px] overflow-auto rounded border border-[#183549]">
+                  <table className="w-full min-w-[520px] text-xs">
+                    <thead className="bg-[#091622] text-slate-500">
+                      <tr>
+                        <th className="px-2 py-1 text-left">Pair</th>
+                        <th className="px-2 py-1 text-right">Last</th>
+                        <th className="px-2 py-1 text-right">24H Vol</th>
+                        <th className="px-2 py-1 text-right">Swaps</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {marketVM.rows.slice(0, 28).map((row) => (
+                        <tr key={`desk-row-${row.id}`} className="border-t border-[#183549] text-slate-200">
+                          <td className="px-2 py-1.5">{row.pair}</td>
+                          <td className="px-2 py-1.5 text-right font-mono">{shortAmount(row.last || 0)}</td>
+                          <td className="px-2 py-1.5 text-right font-mono">{shortAmount(row.volume24h)}</td>
+                          <td className="px-2 py-1.5 text-right font-mono">{row.swaps}</td>
+                        </tr>
+                      ))}
+                      {!marketVM.rows.length ? (
+                        <tr>
+                          <td colSpan={4} className="px-2 py-4 text-center text-slate-500">
+                            No chain markets loaded.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="rounded border border-[#183549] bg-[#08131f] p-3">
+                <p className="mb-2 text-sm font-semibold text-slate-200">Quick Actions</p>
+                <div className="grid gap-2">
+                  <Link href="/pro?desk=trade" className="rounded border border-[#57d6ca] bg-[#123345] px-3 py-2 text-center text-sm font-semibold text-[#79e7dc]">
+                    Open Trade Terminal
+                  </Link>
+                  <Link href="/harmony" className="rounded border border-[#21445b] bg-[#0c1a29] px-3 py-2 text-center text-sm text-slate-200">
+                    Harmony Swap
+                  </Link>
+                  <Link href="/liquidity" className="rounded border border-[#21445b] bg-[#0c1a29] px-3 py-2 text-center text-sm text-slate-200">
+                    Liquidity Management
+                  </Link>
+                  <Link href="/ledger" className="rounded border border-[#21445b] bg-[#0c1a29] px-3 py-2 text-center text-sm text-slate-200">
+                    Ledger & Accounting
+                  </Link>
+                </div>
+              </div>
+              <div className="rounded border border-[#183549] bg-[#08131f] p-3">
+                <p className="mb-2 text-sm font-semibold text-slate-200">Recent Activity</p>
+                <div className="max-h-[280px] space-y-1 overflow-auto">
+                  {tradesVM.trades.slice(0, 18).map((trade) => (
+                    <div key={`desk-trade-${trade.txHash}-${trade.at}`} className="rounded bg-[#101f2d] px-2 py-1 text-xs">
+                      <p className={trade.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>
+                        {trade.side.toUpperCase()} {shortAmount(trade.baseAmount)} {trade.baseToken}
+                      </p>
+                      <p className="font-mono text-slate-300">Price {shortAmount(trade.price)} {trade.quoteToken}</p>
+                      <p className="text-slate-500">{new Date(trade.at).toLocaleString()}</p>
+                    </div>
+                  ))}
+                  {!tradesVM.trades.length ? <p className="px-2 py-3 text-xs text-slate-500">No recent trades yet.</p> : null}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );

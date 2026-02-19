@@ -16,8 +16,8 @@ const DEFAULT_SWAP_GAS_BY_CHAIN: Record<number, bigint> = {
 };
 const SWAP_GAS_SOFT_CAP = 3_000_000n;
 const SWAP_GAS_FLOOR = 250_000n;
-const LEDGER_RECENT_MAX_LIMIT = 2000;
-const ANALYTICS_MAX_MINUTES = 43200;
+const LEDGER_RECENT_MAX_LIMIT = 1200;
+const ANALYTICS_MAX_MINUTES = 10080;
 
 const harmonyRouterAbi = [
   {
@@ -246,6 +246,58 @@ async function fetchJson<T>(path: string): Promise<T> {
     throw new Error(`request failed: ${res.status}`);
   }
   return body as T;
+}
+
+async function fetchLedgerRecentWithFallback(chainId: number, preferredLimit: number): Promise<LedgerResponse> {
+  const candidates = Array.from(
+    new Set([preferredLimit, 1000, 800, 500, 300, 200].filter((value) => Number.isFinite(value) && value > 0))
+  );
+  let lastError: Error | null = null;
+
+  for (const limit of candidates) {
+    try {
+      return await fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=${limit}`);
+    } catch (err) {
+      if (err instanceof Error) {
+        lastError = err;
+        if (!err.message.includes('422')) {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  throw lastError || new Error('ledger endpoint unavailable');
+}
+
+async function fetchAnalyticsWithFallback(preferredMinutes: number): Promise<AnalyticsResponse> {
+  const candidates = Array.from(
+    new Set(
+      [preferredMinutes, 4320, 2880, 1440, 720, 360, 180]
+        .map((value) => Math.max(1, Math.min(ANALYTICS_MAX_MINUTES, Math.floor(value))))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    )
+  );
+  let lastError: Error | null = null;
+
+  for (const minutes of candidates) {
+    try {
+      return await fetchJson<AnalyticsResponse>(`/analytics?minutes=${minutes}`);
+    } catch (err) {
+      if (err instanceof Error) {
+        lastError = err;
+        if (!err.message.includes('422')) {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  throw lastError || new Error('analytics endpoint unavailable');
 }
 
 function tokenPairKey(a: string, b: string): string {
@@ -596,7 +648,13 @@ function computeChartPoints(candles: OhlcCandle[]): ChartPoint[] {
   }));
 }
 
-export function useMarketListVM(chainId: number, searchQuery: string, filter: 'all' | 'favorites' | 'spot', favorites: string[]) {
+export function useMarketListVM(
+  chainId: number,
+  searchQuery: string,
+  filter: 'all' | 'favorites' | 'spot',
+  favorites: string[],
+  refreshNonce = 0
+) {
   const [pairs, setPairs] = useState<PairRow[]>([]);
   const [ledgerRows, setLedgerRows] = useState<LedgerEntry[]>([]);
   const [tokensByChain, setTokensByChain] = useState<Record<string, TokenItem[]>>({});
@@ -614,7 +672,7 @@ export function useMarketListVM(chainId: number, searchQuery: string, filter: 'a
         const [pairsPayload, tokensPayloadData, ledgerPayload] = await Promise.all([
           fetchJson<PairsResponse>(`/pairs?chain_id=${chainId}&limit=250`),
           fetchJson<TokensResponse>('/tokens'),
-          fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=${LEDGER_RECENT_MAX_LIMIT}`)
+          fetchLedgerRecentWithFallback(chainId, LEDGER_RECENT_MAX_LIMIT)
         ]);
         if (!active) return;
         setPairs(pairsPayload.rows || []);
@@ -637,7 +695,7 @@ export function useMarketListVM(chainId: number, searchQuery: string, filter: 'a
       active = false;
       window.clearInterval(timer);
     };
-  }, [chainId]);
+  }, [chainId, refreshNonce]);
 
   const pairStats = useMemo(() => computePairStatsMap(pairs, chainId, ledgerRows), [chainId, ledgerRows, pairs]);
   const marketRows = useMemo(() => parseMarketRows(pairs, chainId, pairStats), [pairs, chainId, pairStats]);
@@ -680,7 +738,7 @@ export function useMarketListVM(chainId: number, searchQuery: string, filter: 'a
   };
 }
 
-export function useTradesVM(chainId: number, selectedPair: MarketRow | null) {
+export function useTradesVM(chainId: number, selectedPair: MarketRow | null, refreshNonce = 0) {
   const [trades, setTrades] = useState<TradeRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -692,7 +750,7 @@ export function useTradesVM(chainId: number, selectedPair: MarketRow | null) {
       setLoading(true);
       setError('');
       try {
-        const payload = await fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=${LEDGER_RECENT_MAX_LIMIT}`);
+        const payload = await fetchLedgerRecentWithFallback(chainId, LEDGER_RECENT_MAX_LIMIT);
         if (!active) return;
         setTrades(parseTrades(payload.rows || [], selectedPair));
       } catch (err) {
@@ -711,7 +769,7 @@ export function useTradesVM(chainId: number, selectedPair: MarketRow | null) {
       active = false;
       window.clearInterval(timer);
     };
-  }, [chainId, selectedPair?.id]);
+  }, [chainId, refreshNonce, selectedPair?.id]);
 
   return { trades, loading, error };
 }
@@ -721,8 +779,9 @@ export function usePairVM(params: {
   selectedPair: MarketRow | null;
   trades: TradeRow[];
   timeframe: Timeframe;
+  refreshNonce?: number;
 }) {
-  const { chainId, selectedPair, trades, timeframe } = params;
+  const { chainId, selectedPair, trades, timeframe, refreshNonce = 0 } = params;
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -735,7 +794,7 @@ export function usePairVM(params: {
       setLoading(true);
       setError('');
       try {
-        const payload = await fetchJson<AnalyticsResponse>(`/analytics?minutes=${minutes}`);
+        const payload = await fetchAnalyticsWithFallback(minutes);
         if (!active) return;
         setAnalytics(payload);
       } catch (err) {
@@ -754,7 +813,7 @@ export function usePairVM(params: {
       active = false;
       window.clearInterval(timer);
     };
-  }, [chainId, timeframe]);
+  }, [chainId, refreshNonce, timeframe]);
 
   const ohlcCandles = useMemo(() => computeOhlcCandles(trades, timeframe), [timeframe, trades]);
   const chartPoints = useMemo(
