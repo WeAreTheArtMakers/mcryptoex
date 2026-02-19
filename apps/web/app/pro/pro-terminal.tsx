@@ -1,11 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { useAccount, useConnect, useDisconnect, useSwitchChain } from 'wagmi';
+import { useAccount } from 'wagmi';
 import {
   DEFAULT_CHAIN_ID,
-  MarketRow,
   OhlcCandle,
   Timeframe,
   shortAmount,
@@ -19,7 +17,7 @@ import {
 type MarketFilter = 'all' | 'favorites' | 'spot';
 type MobilePanel = 'markets' | 'chart' | 'trade' | 'account';
 type BookTab = 'book' | 'trades';
-type AccountTab = 'balances' | 'positions' | 'orders' | 'history';
+type AccountTab = 'balances' | 'positions' | 'open-orders' | 'twap' | 'trade-history' | 'funding-history' | 'order-history';
 
 type PersistedLayout = {
   chainId: number;
@@ -28,130 +26,129 @@ type PersistedLayout = {
   timeframe: Timeframe;
   bookTab: BookTab;
   mobilePanel: MobilePanel;
+  accountTab: AccountTab;
   favorites: string[];
   selectedPairByChain: Record<string, string>;
 };
 
-const LAYOUT_STORAGE_KEY = 'mcryptoex.pro.layout.v2';
+const LAYOUT_STORAGE_KEY = 'mcryptoex.pro.layout.v3';
 
 function shortAddress(value?: string) {
-  if (!value) return 'Not connected';
+  if (!value) return '0x...';
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
-
-function pctClass(value: number | null) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 'text-slate-300';
-  return value >= 0 ? 'text-emerald-300' : 'text-rose-300';
 }
 
 function formatChange(value: number | null): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 'n/a';
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+  return `${value >= 0 ? '+' : ''}${value.toFixed(3)}%`;
 }
 
-function numOrZero(value: number): number {
+function changeClass(value: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'text-slate-300';
+  return value >= 0 ? 'text-emerald-300' : 'text-rose-300';
+}
+
+function safe(value: number): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-function OhlcViewport({ candles, pairLabel }: { candles: OhlcCandle[]; pairLabel: string }) {
+function OhlcCanvas({ candles, pairLabel }: { candles: OhlcCandle[]; pairLabel: string }) {
   const width = 1180;
-  const height = 440;
-  const left = 52;
-  const right = 16;
-  const priceTop = 14;
-  const priceBottom = 314;
-  const volumeTop = 332;
-  const volumeBottom = 420;
+  const height = 520;
+  const left = 58;
+  const right = 20;
+  const top = 18;
+  const priceBottom = 382;
+  const volumeTop = 402;
+  const volumeBottom = 500;
 
   if (!candles.length) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-slate-400">
-        Waiting for on-chain trades to build OHLC candles for {pairLabel}.
+        Waiting for OHLC feed from ledger buckets for {pairLabel}.
       </div>
     );
   }
 
-  const highMax = Math.max(...candles.map((candle) => numOrZero(candle.high)));
-  const lowMin = Math.min(...candles.map((candle) => numOrZero(candle.low)));
-  const priceSpan = Math.max(highMax - lowMin, 0.000001);
-  const pad = priceSpan * 0.08;
-  const minPrice = lowMin - pad;
-  const maxPrice = highMax + pad;
+  const highs = candles.map((candle) => safe(candle.high));
+  const lows = candles.map((candle) => safe(candle.low));
+  const maxHigh = Math.max(...highs);
+  const minLow = Math.min(...lows);
+  const span = Math.max(maxHigh - minLow, 0.000001);
+  const pad = span * 0.08;
+  const minPrice = minLow - pad;
+  const maxPrice = maxHigh + pad;
   const safeSpan = Math.max(maxPrice - minPrice, 0.000001);
 
-  const maxVolume = Math.max(1, ...candles.map((candle) => numOrZero(candle.volume)));
-  const step = candles.length > 0 ? (width - left - right) / candles.length : 0;
-  const bodyWidth = Math.max(2.5, step * 0.55);
+  const maxVolume = Math.max(1, ...candles.map((candle) => safe(candle.volume)));
+  const step = candles.length ? (width - left - right) / candles.length : 1;
+  const bodyWidth = Math.max(2, step * 0.58);
 
-  const mapPriceY = (price: number) => {
+  const mapPrice = (price: number) => {
     const ratio = (price - minPrice) / safeSpan;
-    return priceBottom - ratio * (priceBottom - priceTop);
+    return priceBottom - ratio * (priceBottom - top);
   };
-
-  const mapVolumeY = (volume: number) => {
+  const mapVolume = (volume: number) => {
     const ratio = volume / maxVolume;
     return volumeBottom - ratio * (volumeBottom - volumeTop);
   };
 
-  const horizontalTicks = Array.from({ length: 6 }).map((_, idx) => {
-    const ratio = idx / 5;
-    const value = maxPrice - ratio * safeSpan;
-    const y = priceTop + ratio * (priceBottom - priceTop);
-    return { y, value };
+  const yTicks = Array.from({ length: 7 }).map((_, idx) => {
+    const ratio = idx / 6;
+    const price = maxPrice - ratio * safeSpan;
+    const y = top + ratio * (priceBottom - top);
+    return { y, price };
   });
 
-  const xLabelStep = Math.max(1, Math.floor(candles.length / 6));
+  const xTickStep = Math.max(1, Math.floor(candles.length / 7));
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full">
-      <rect x={0} y={0} width={width} height={height} fill="#071521" />
+      <rect x={0} y={0} width={width} height={height} fill="#08131e" />
 
-      {horizontalTicks.map((tick, idx) => (
-        <g key={`h-${idx}`}>
-          <line x1={left} x2={width - right} y1={tick.y} y2={tick.y} stroke="#143247" strokeDasharray="4 4" opacity={0.65} />
-          <text x={width - 6} y={tick.y + 4} textAnchor="end" fill="#8ca5bd" fontSize="11">
-            {tick.value.toFixed(4)}
+      {yTicks.map((tick, idx) => (
+        <g key={`tick-${idx}`}>
+          <line x1={left} x2={width - right} y1={tick.y} y2={tick.y} stroke="#173042" strokeDasharray="4 4" opacity={0.65} />
+          <text x={width - 4} y={tick.y + 4} fill="#8ea5b9" fontSize="11" textAnchor="end">
+            {tick.price.toFixed(3)}
           </text>
         </g>
       ))}
 
       {candles.map((candle, idx) => {
-        const xCenter = left + idx * step + step / 2;
-        const yHigh = mapPriceY(candle.high);
-        const yLow = mapPriceY(candle.low);
-        const yOpen = mapPriceY(candle.open);
-        const yClose = mapPriceY(candle.close);
-        const top = Math.min(yOpen, yClose);
-        const bottom = Math.max(yOpen, yClose);
+        const x = left + idx * step + step / 2;
+        const yHigh = mapPrice(candle.high);
+        const yLow = mapPrice(candle.low);
+        const yOpen = mapPrice(candle.open);
+        const yClose = mapPrice(candle.close);
+        const topBody = Math.min(yOpen, yClose);
+        const bodyHeight = Math.max(1.4, Math.abs(yClose - yOpen));
         const up = candle.close >= candle.open;
-        const color = up ? '#3ad6b5' : '#ef6d7a';
+        const color = up ? '#39d2b4' : '#ea6b77';
 
-        const volumeY = mapVolumeY(candle.volume);
-        const labelVisible = idx % xLabelStep === 0 || idx === candles.length - 1;
+        const yVol = mapVolume(candle.volume);
+        const showLabel = idx % xTickStep === 0 || idx === candles.length - 1;
 
         return (
-          <g key={`${candle.bucket}-${idx}`}>
-            <line x1={xCenter} x2={xCenter} y1={yHigh} y2={yLow} stroke={color} strokeWidth={1.4} />
+          <g key={`candle-${candle.bucket}-${idx}`}>
+            <line x1={x} y1={yHigh} x2={x} y2={yLow} stroke={color} strokeWidth={1.35} />
             <rect
-              x={xCenter - bodyWidth / 2}
-              y={top}
+              x={x - bodyWidth / 2}
+              y={topBody}
               width={bodyWidth}
-              height={Math.max(1.8, bottom - top)}
-              fill={up ? '#31c7a8' : '#e55f6d'}
-              opacity={0.95}
-              rx={0.7}
+              height={bodyHeight}
+              fill={up ? '#31c7a8' : '#e95f70'}
+              rx={0.5}
             />
-
             <rect
-              x={xCenter - bodyWidth / 2}
-              y={volumeY}
+              x={x - bodyWidth / 2}
+              y={yVol}
               width={bodyWidth}
-              height={Math.max(1, volumeBottom - volumeY)}
-              fill={up ? 'rgba(58,214,181,0.35)' : 'rgba(239,109,122,0.35)'}
+              height={Math.max(1, volumeBottom - yVol)}
+              fill={up ? 'rgba(57,210,180,0.34)' : 'rgba(234,107,119,0.34)'}
             />
-
-            {labelVisible ? (
-              <text x={xCenter} y={height - 8} textAnchor="middle" fill="#8ca5bd" fontSize="10">
+            {showLabel ? (
+              <text x={x} y={height - 6} fill="#8399ad" fontSize="10" textAnchor="middle">
                 {candle.label}
               </text>
             ) : null}
@@ -159,68 +156,11 @@ function OhlcViewport({ candles, pairLabel }: { candles: OhlcCandle[]; pairLabel
         );
       })}
 
-      <line x1={left} x2={width - right} y1={volumeTop - 2} y2={volumeTop - 2} stroke="#143247" />
-      <text x={left} y={volumeTop - 8} fill="#8ca5bd" fontSize="10">
-        Vol
+      <line x1={left} x2={width - right} y1={volumeTop - 2} y2={volumeTop - 2} stroke="#173042" />
+      <text x={left} y={volumeTop - 8} fill="#8ea5b9" fontSize="10">
+        Volume
       </text>
     </svg>
-  );
-}
-
-function WalletBadge({ chainId }: { chainId: number }) {
-  const { address, isConnected, chainId: walletChainId } = useAccount();
-  const { connect, connectors, isPending } = useConnect();
-  const { disconnect } = useDisconnect();
-  const { switchChain, isPending: switching } = useSwitchChain();
-
-  const connectable = useMemo(() => {
-    return connectors.filter((connector) => connector.type !== 'injected' || connector.name);
-  }, [connectors]);
-
-  return (
-    <div className="rounded-lg border border-[#21384a] bg-[#081423] p-2.5">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Wallet</p>
-          <p className="text-sm font-semibold text-slate-100">{shortAddress(address)}</p>
-          <p className="text-[11px] text-slate-400">Chain {walletChainId ?? 'read-only'}</p>
-        </div>
-        {isConnected ? (
-          <button
-            type="button"
-            onClick={() => disconnect()}
-            className="rounded border border-rose-500/45 bg-rose-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-rose-200"
-          >
-            Disconnect
-          </button>
-        ) : null}
-      </div>
-
-      {!isConnected ? (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {connectable.slice(0, 2).map((connector) => (
-            <button
-              key={connector.uid || connector.id || connector.name}
-              type="button"
-              onClick={() => connect({ connector })}
-              disabled={isPending}
-              className="rounded border border-cyan-400/55 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-cyan-200 disabled:opacity-50"
-            >
-              {isPending ? 'Connecting...' : connector.name}
-            </button>
-          ))}
-        </div>
-      ) : walletChainId !== chainId ? (
-        <button
-          type="button"
-          onClick={() => switchChain({ chainId })}
-          disabled={switching}
-          className="mt-2 rounded border border-amber-400/55 bg-amber-400/12 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-200 disabled:opacity-50"
-        >
-          {switching ? 'Switching...' : `Switch to ${chainId}`}
-        </button>
-      ) : null}
-    </div>
   );
 }
 
@@ -228,14 +168,17 @@ export function ProTerminal() {
   const [chainId, setChainId] = useState(DEFAULT_CHAIN_ID);
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<MarketFilter>('all');
-  const [selectedPairId, setSelectedPairId] = useState<string>('');
-  const [timeframe, setTimeframe] = useState<Timeframe>('5m');
+  const [selectedPairId, setSelectedPairId] = useState('');
+  const [timeframe, setTimeframe] = useState<Timeframe>('1h');
   const [bookTab, setBookTab] = useState<BookTab>('book');
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>('markets');
   const [accountTab, setAccountTab] = useState<AccountTab>('balances');
   const [favorites, setFavorites] = useState<string[]>([]);
   const [selectedPairByChain, setSelectedPairByChain] = useState<Record<string, string>>({});
-  const [layoutReady, setLayoutReady] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [sizePct, setSizePct] = useState(0);
+
+  const { address } = useAccount();
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -246,42 +189,44 @@ export function ProTerminal() {
         if (typeof parsed.chainId === 'number') setChainId(parsed.chainId);
         if (typeof parsed.searchQuery === 'string') setSearchQuery(parsed.searchQuery);
         if (parsed.filter === 'all' || parsed.filter === 'favorites' || parsed.filter === 'spot') setFilter(parsed.filter);
-        if (parsed.timeframe === '1m' || parsed.timeframe === '5m' || parsed.timeframe === '1h' || parsed.timeframe === '1d') {
-          setTimeframe(parsed.timeframe);
-        }
+        if (parsed.timeframe === '1m' || parsed.timeframe === '5m' || parsed.timeframe === '1h' || parsed.timeframe === '1d') setTimeframe(parsed.timeframe);
         if (parsed.bookTab === 'book' || parsed.bookTab === 'trades') setBookTab(parsed.bookTab);
-        if (
-          parsed.mobilePanel === 'markets' ||
-          parsed.mobilePanel === 'chart' ||
-          parsed.mobilePanel === 'trade' ||
-          parsed.mobilePanel === 'account'
-        ) {
+        if (parsed.mobilePanel === 'markets' || parsed.mobilePanel === 'chart' || parsed.mobilePanel === 'trade' || parsed.mobilePanel === 'account') {
           setMobilePanel(parsed.mobilePanel);
         }
+        if (
+          parsed.accountTab === 'balances' ||
+          parsed.accountTab === 'positions' ||
+          parsed.accountTab === 'open-orders' ||
+          parsed.accountTab === 'twap' ||
+          parsed.accountTab === 'trade-history' ||
+          parsed.accountTab === 'funding-history' ||
+          parsed.accountTab === 'order-history'
+        ) {
+          setAccountTab(parsed.accountTab);
+        }
         if (Array.isArray(parsed.favorites)) {
-          setFavorites(parsed.favorites.filter((item): item is string => typeof item === 'string').slice(0, 200));
+          setFavorites(parsed.favorites.filter((item): item is string => typeof item === 'string').slice(0, 250));
         }
         if (parsed.selectedPairByChain && typeof parsed.selectedPairByChain === 'object') {
           const next: Record<string, string> = {};
           for (const [key, value] of Object.entries(parsed.selectedPairByChain)) {
-            if (typeof value === 'string') {
-              next[key] = value;
-            }
+            if (typeof value === 'string') next[key] = value;
           }
           setSelectedPairByChain(next);
         }
       }
     } catch {
-      // ignore malformed persistence payload
+      // ignore
     } finally {
-      setLayoutReady(true);
+      setReady(true);
     }
   }, []);
 
   const marketVM = useMarketListVM(chainId, searchQuery, filter, favorites);
 
   useEffect(() => {
-    if (!layoutReady || typeof window === 'undefined') return;
+    if (!ready || typeof window === 'undefined') return;
     const payload: PersistedLayout = {
       chainId,
       searchQuery,
@@ -289,21 +234,23 @@ export function ProTerminal() {
       timeframe,
       bookTab,
       mobilePanel,
+      accountTab,
       favorites,
       selectedPairByChain
     };
     window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(payload));
-  }, [bookTab, chainId, favorites, filter, layoutReady, mobilePanel, searchQuery, selectedPairByChain, timeframe]);
+  }, [accountTab, bookTab, chainId, favorites, filter, mobilePanel, ready, searchQuery, selectedPairByChain, timeframe]);
 
   useEffect(() => {
-    const persistedPair = selectedPairByChain[String(chainId)];
+    const current = selectedPairByChain[String(chainId)];
+
     if (!marketVM.rows.length) {
       setSelectedPairId('');
       return;
     }
 
-    if (persistedPair && marketVM.allRows.some((row) => row.id === persistedPair)) {
-      if (selectedPairId !== persistedPair) setSelectedPairId(persistedPair);
+    if (current && marketVM.allRows.some((row) => row.id === current)) {
+      if (selectedPairId !== current) setSelectedPairId(current);
       return;
     }
 
@@ -320,25 +267,14 @@ export function ProTerminal() {
     setSelectedPairByChain((current) => {
       const key = String(chainId);
       if (current[key] === selectedPairId) return current;
-      return {
-        ...current,
-        [key]: selectedPairId
-      };
+      return { ...current, [key]: selectedPairId };
     });
   }, [chainId, selectedPairId]);
 
-  const selectedPair = useMemo(
-    () => marketVM.allRows.find((row) => row.id === selectedPairId) || null,
-    [marketVM.allRows, selectedPairId]
-  );
+  const selectedPair = useMemo(() => marketVM.allRows.find((row) => row.id === selectedPairId) || null, [marketVM.allRows, selectedPairId]);
 
   const tradesVM = useTradesVM(chainId, selectedPair);
-  const pairVM = usePairVM({
-    chainId,
-    selectedPair,
-    trades: tradesVM.trades,
-    timeframe
-  });
+  const pairVM = usePairVM({ chainId, selectedPair, trades: tradesVM.trades, timeframe });
   const orderbookVM = useOrderbookVM(selectedPair, pairVM.metrics.lastPrice);
   const entryVM = useOrderEntryVM({
     chainId,
@@ -347,6 +283,22 @@ export function ProTerminal() {
     selectedNetwork: marketVM.selectedNetwork
   });
 
+  const askMax = Math.max(1, ...orderbookVM.asks.map((level) => safe(level.total)));
+  const bidMax = Math.max(1, ...orderbookVM.bids.map((level) => safe(level.total)));
+
+  const chainLabel = marketVM.selectedNetwork ? `${marketVM.selectedNetwork.name} (${chainId})` : `Chain ${chainId}`;
+
+  useEffect(() => {
+    if (sizePct <= 0) return;
+    const base = Number(entryVM.availableBalance || '0');
+    if (!Number.isFinite(base) || base <= 0) {
+      entryVM.setAmount('0');
+      return;
+    }
+    const nextAmount = (base * sizePct) / 100;
+    entryVM.setAmount(nextAmount.toFixed(6));
+  }, [entryVM, sizePct]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
@@ -354,22 +306,25 @@ export function ProTerminal() {
 
       if (event.key === '/') {
         event.preventDefault();
-        const input = document.getElementById('pro-market-search');
-        if (input instanceof HTMLInputElement) input.focus();
+        const el = document.getElementById('pro-market-search');
+        if (el instanceof HTMLInputElement) el.focus();
       }
 
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         if (!marketVM.rows.length) return;
         event.preventDefault();
-        const index = marketVM.rows.findIndex((row) => row.id === selectedPairId);
-        const current = index >= 0 ? index : 0;
-        const nextIndex = event.key === 'ArrowDown' ? Math.min(marketVM.rows.length - 1, current + 1) : Math.max(0, current - 1);
-        setSelectedPairId(marketVM.rows[nextIndex].id);
+        const current = Math.max(0, marketVM.rows.findIndex((row) => row.id === selectedPairId));
+        const next = event.key === 'ArrowDown' ? Math.min(marketVM.rows.length - 1, current + 1) : Math.max(0, current - 1);
+        setSelectedPairId(marketVM.rows[next].id);
       }
 
       if (event.key === 'Enter' && selectedPair) {
         event.preventDefault();
-        entryVM.execute();
+        if (entryVM.entryMode === 'market' && !entryVM.quote) {
+          void entryVM.requestQuote();
+        } else {
+          void entryVM.execute();
+        }
       }
     }
 
@@ -377,252 +332,281 @@ export function ProTerminal() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [entryVM, marketVM.rows, selectedPair, selectedPairId]);
 
-  const chainLabel = marketVM.selectedNetwork ? `${marketVM.selectedNetwork.name} (${chainId})` : `Chain ${chainId}`;
-  const candleReady = pairVM.ohlcCandles.length > 0;
-
-  const orderbookMaxAsk = Math.max(1, ...orderbookVM.asks.map((level) => level.total));
-  const orderbookMaxBid = Math.max(1, ...orderbookVM.bids.map((level) => level.total));
-
-  const toggleFavorite = (id: string) => {
-    setFavorites((list) => (list.includes(id) ? list.filter((item) => item !== id) : [id, ...list].slice(0, 200)));
+  const executePrimary = async () => {
+    if (entryVM.entryMode === 'market' && !entryVM.quote) {
+      await entryVM.requestQuote();
+      return;
+    }
+    await entryVM.execute();
   };
 
   return (
-    <div className="mx-[calc(50%-50vw)] w-screen px-2 pb-4 md:px-4">
-      <div className="mb-2 rounded-lg border border-[#1a394a] bg-[#0a1726]">
-        <div className="rounded-t-lg bg-[#53d4cf] px-3 py-1 text-xs font-medium text-[#062429]">
-          Welcome to mCryptoEx Pro Terminal. Wallet-signed non-custodial Spot trading.
+    <div className="flex min-h-screen flex-col bg-[#06111d] text-slate-100">
+      <header className="flex h-14 items-center justify-between border-b border-[#183344] bg-[#09141f] px-4">
+        <div className="flex items-center gap-5">
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-[#67e3d5]" />
+            <span className="text-sm font-semibold">mCryptoEx</span>
+          </div>
+          <nav className="hidden items-center gap-5 text-sm text-slate-200 xl:flex">
+            {['Trade', 'Portfolio', 'Earn', 'Vaults', 'Staking', 'Referrals', 'Leaderboard', 'More'].map((item) => (
+              <button key={item} type="button" className={`transition ${item === 'Trade' ? 'text-[#58d4c8]' : 'hover:text-white'}`}>
+                {item}
+              </button>
+            ))}
+          </nav>
         </div>
-        <div className="grid gap-2 px-3 py-2 md:grid-cols-5">
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Pair</p>
-            <p className="text-sm font-semibold text-slate-100">{selectedPair?.pair || 'Select pair'}</p>
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Last</p>
-            <p className="font-mono text-sm text-slate-100">{shortAmount(pairVM.metrics.lastPrice)}</p>
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">24h Change</p>
-            <p className={`font-mono text-sm ${pctClass(pairVM.metrics.change24h)}`}>{formatChange(pairVM.metrics.change24h)}</p>
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">24h Volume</p>
-            <p className="font-mono text-sm text-slate-100">{shortAmount(pairVM.metrics.volume24h)}</p>
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.14em] text-slate-500">Route Target</p>
-            <p className="font-mono text-sm text-cyan-200">
-              {entryVM.tokenInSymbol} {'->'} {entryVM.tokenOutSymbol}
-            </p>
-          </div>
+        <div className="flex items-center gap-2">
+          <button className="rounded-md border border-[#204257] bg-[#0c1a29] px-3 py-1 text-sm text-slate-200">{shortAddress(address)}</button>
+          {['◰', '◎', '⚙'].map((icon) => (
+            <button key={icon} className="h-8 w-8 rounded-md border border-[#204257] bg-[#0c1a29] text-xs text-slate-200">
+              {icon}
+            </button>
+          ))}
         </div>
+      </header>
+
+      <div className="h-8 border-b border-[#1b3f4d] bg-[#58d4c8] px-4 py-1 text-xs font-medium text-[#062428]">
+        Wallet-first non-custodial trading. Tempo API is read-only; all executions are wallet-signed.
       </div>
 
-      <div className="mb-2 flex gap-2 lg:hidden">
-        {([
-          ['markets', 'Market'],
-          ['chart', 'Chart'],
-          ['trade', 'Trade'],
-          ['account', 'Account']
-        ] as const).map(([panel, label]) => (
-          <button
-            key={panel}
-            type="button"
-            onClick={() => setMobilePanel(panel)}
-            className={`flex-1 rounded-md border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${
-              mobilePanel === panel
-                ? 'border-cyan-400/80 bg-cyan-500/20 text-cyan-200'
-                : 'border-[#21384a] bg-[#081423] text-slate-300'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid gap-2 lg:grid-cols-[520px_minmax(0,1fr)_420px]">
-        <section className={`${mobilePanel === 'markets' ? 'block' : 'hidden'} lg:block`}>
-          <div className="h-full rounded-lg border border-[#1a394a] bg-[#081423] p-2.5">
-            <div className="mb-2 flex items-center justify-between">
+      <main className="flex-1 p-1.5">
+        <div className="mb-1 grid grid-cols-[minmax(0,1fr)_280px] gap-1 rounded border border-[#173448] bg-[#0a1724] px-2 py-2 text-xs">
+          <div className="flex min-w-0 items-center gap-4 overflow-hidden">
+            <button className="text-lg text-[#63e0d2]">✦</button>
+            <div className="min-w-0">
+              <p className="truncate text-2xl font-semibold">{selectedPair?.pair || 'Select Pair'}</p>
+            </div>
+            <div className="hidden items-center gap-6 text-sm text-slate-300 md:flex">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Market Watch</p>
-                <p className="text-sm font-semibold text-slate-100">{chainLabel}</p>
+                <p className="text-slate-500">Price</p>
+                <p className="font-mono text-[#8de5db]">{shortAmount(pairVM.metrics.lastPrice)}</p>
               </div>
-              <div className="flex gap-1 rounded border border-[#223f53] bg-[#0a1726] p-1">
-                {(['all', 'favorites', 'spot'] as const).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setFilter(value)}
-                    className={`rounded px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${
-                      filter === value
-                        ? 'bg-cyan-500/20 text-cyan-200'
-                        : 'text-slate-400 hover:text-slate-100'
-                    }`}
-                  >
-                    {value}
-                  </button>
-                ))}
+              <div>
+                <p className="text-slate-500">24H Change</p>
+                <p className={`font-mono ${changeClass(pairVM.metrics.change24h)}`}>{formatChange(pairVM.metrics.change24h)}</p>
+              </div>
+              <div>
+                <p className="text-slate-500">24H Volume</p>
+                <p className="font-mono">{shortAmount(pairVM.metrics.volume24h)} {selectedPair?.token1 || ''}</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Market Cap</p>
+                <p className="font-mono text-slate-300">n/a</p>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-1">
+            {['↗', '⧉', '☰'].map((i) => (
+              <button key={i} className="h-7 w-7 rounded border border-[#21445b] bg-[#0c1a29] text-[11px] text-slate-300">
+                {i}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mb-1 flex gap-1 lg:hidden">
+          {([
+            ['markets', 'Market'],
+            ['chart', 'Chart'],
+            ['trade', 'Trade'],
+            ['account', 'Account']
+          ] as const).map(([panel, label]) => (
+            <button
+              key={panel}
+              type="button"
+              onClick={() => setMobilePanel(panel)}
+              className={`flex-1 rounded border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${
+                mobilePanel === panel
+                  ? 'border-[#55d1c5] bg-[#132f3f] text-[#78e6db]'
+                  : 'border-[#21445b] bg-[#0c1a29] text-slate-300'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid h-[calc(100vh-214px)] gap-1 lg:grid-cols-[520px_minmax(0,1fr)_640px]">
+          <section className={`${mobilePanel === 'markets' ? 'block' : 'hidden'} rounded border border-[#173448] bg-[#0a1724] p-2 lg:block`}>
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs text-slate-400">{chainLabel}</p>
+              <div className="flex items-center gap-1">
+                <button className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1 text-[11px] text-[#77e5da]">Strict</button>
+                <button className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1 text-[11px] text-slate-300">All</button>
               </div>
             </div>
 
-            <div className="mb-2 grid grid-cols-[minmax(0,1fr)_110px] gap-2">
+            <div className="mb-2 flex items-center gap-2">
               <input
                 id="pro-market-search"
-                type="text"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search token or pair"
-                className="rounded border border-[#223f53] bg-[#07111e] px-3 py-2 text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400/70"
+                placeholder="Search"
+                className="h-9 flex-1 rounded border border-[#21445b] bg-[#0a1623] px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-[#59d8cc]"
               />
               <select
                 value={chainId}
                 onChange={(event) => setChainId(Number(event.target.value))}
-                className="rounded border border-[#223f53] bg-[#07111e] px-2 py-2 text-xs text-slate-200"
+                className="h-9 rounded border border-[#21445b] bg-[#0a1623] px-2 text-xs text-slate-300"
               >
                 {(marketVM.networks.length ? marketVM.networks : [{ chain_id: chainId, name: chainLabel }]).map((network) => (
                   <option key={network.chain_id} value={network.chain_id}>
-                    {network.name}
+                    {network.chain_id}
                   </option>
                 ))}
               </select>
             </div>
 
-            <div className="overflow-hidden rounded border border-[#173449] bg-[#06111d]">
-              <div className="grid grid-cols-[24px_minmax(0,1.2fr)_80px_92px_90px_88px] gap-2 border-b border-[#173449] px-2 py-2 text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                <span>*</span>
-                <span>Symbol</span>
-                <span className="text-right">Last</span>
-                <span className="text-right">24h %</span>
-                <span className="text-right">Volume</span>
-                <span className="text-right">OI</span>
-              </div>
+            <div className="mb-2 flex flex-wrap gap-1 text-[11px]">
+              {['All', 'Perps', 'Spot', 'Crypto', 'Tradfi', 'HIP-3', 'Trending', 'Pre-launch'].map((chip) => (
+                <button
+                  key={chip}
+                  className={`rounded border px-2 py-1 ${chip === 'All' ? 'border-[#57d6ca] text-[#75e6da]' : 'border-[#21445b] text-slate-400'}`}
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
 
-              <div className="max-h-[62vh] overflow-y-auto">
+            <div className="overflow-hidden rounded border border-[#183549]">
+              <div className="grid grid-cols-[24px_minmax(0,1fr)_90px_110px_88px_106px] gap-2 border-b border-[#183549] bg-[#091622] px-2 py-2 text-[11px] text-slate-400">
+                <span>☆</span>
+                <span>Symbol</span>
+                <span className="text-right">Last Price</span>
+                <span className="text-right">24H Change</span>
+                <span className="text-right">Volume</span>
+                <span className="text-right">Open Interest</span>
+              </div>
+              <div className="max-h-[calc(100vh-390px)] overflow-y-auto">
                 {marketVM.loading ? (
                   <div className="space-y-1 p-2">
-                    {Array.from({ length: 12 }).map((_, idx) => (
-                      <div key={idx} className="h-7 animate-pulse rounded bg-[#0c1f32]" />
+                    {Array.from({ length: 14 }).map((_, i) => (
+                      <div key={i} className="h-7 animate-pulse rounded bg-[#102436]" />
                     ))}
                   </div>
                 ) : marketVM.rows.length ? (
                   marketVM.rows.map((row) => {
-                    const selected = row.id === selectedPairId;
-                    const favorite = favorites.includes(row.id);
-                    const change = row.change24h;
+                    const isSelected = row.id === selectedPairId;
+                    const isFav = favorites.includes(row.id);
                     return (
                       <button
                         key={row.id}
                         type="button"
                         onClick={() => setSelectedPairId(row.id)}
-                        className={`grid w-full grid-cols-[24px_minmax(0,1.2fr)_80px_92px_90px_88px] gap-2 px-2 py-1.5 text-xs ${
-                          selected ? 'bg-cyan-500/16' : 'hover:bg-[#0d2235]'
+                        className={`grid w-full grid-cols-[24px_minmax(0,1fr)_90px_110px_88px_106px] gap-2 px-2 py-1.5 text-xs ${
+                          isSelected ? 'bg-[#173449]' : 'hover:bg-[#102436]'
                         }`}
                       >
                         <span
                           onClick={(event) => {
                             event.stopPropagation();
-                            toggleFavorite(row.id);
+                            setFavorites((list) =>
+                              list.includes(row.id) ? list.filter((item) => item !== row.id) : [row.id, ...list].slice(0, 250)
+                            );
                           }}
-                          className={`cursor-pointer text-center ${favorite ? 'text-amber-300' : 'text-slate-600'}`}
+                          className={`text-center ${isFav ? 'text-amber-300' : 'text-slate-600'}`}
                           aria-hidden="true"
                         >
                           ★
                         </span>
                         <span className="truncate text-left text-slate-100">{row.pair}</span>
-                        <span className="text-right font-mono text-slate-200">{row.last ? row.last.toFixed(5) : 'n/a'}</span>
-                        <span className={`text-right font-mono ${pctClass(change)}`}>{formatChange(change)}</span>
+                        <span className="text-right font-mono text-slate-200">{row.last ? row.last.toFixed(4) : 'n/a'}</span>
+                        <span className={`text-right font-mono ${changeClass(row.change24h)}`}>{formatChange(row.change24h)}</span>
                         <span className="text-right font-mono text-slate-300">{shortAmount(row.volume24h)}</span>
                         <span className="text-right font-mono text-slate-500">--</span>
                       </button>
                     );
                   })
                 ) : (
-                  <p className="p-3 text-xs text-slate-400">No tradable pairs for this chain.</p>
+                  <p className="p-3 text-xs text-slate-400">No market rows.</p>
                 )}
               </div>
             </div>
             {marketVM.error ? <p className="mt-2 text-xs text-rose-300">{marketVM.error}</p> : null}
-          </div>
-        </section>
+          </section>
 
-        <section className={`${mobilePanel === 'chart' ? 'block' : 'hidden'} lg:block`}>
-          <div className="h-full rounded-lg border border-[#1a394a] bg-[#081423] p-2.5">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Chart</p>
-                <p className="text-xl font-semibold text-slate-100">{selectedPair?.pair || 'Select pair'}</p>
-              </div>
-              <div className="flex items-center gap-1 rounded border border-[#223f53] bg-[#0a1726] p-1">
-                {(['1m', '5m', '1h', '1d'] as Timeframe[]).map((frame) => (
+          <section className={`${mobilePanel === 'chart' ? 'block' : 'hidden'} rounded border border-[#173448] bg-[#0a1724] p-2 lg:block`}>
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm text-slate-300">
+                {(['5m', '1h', '1d'] as const).map((frame) => (
                   <button
                     key={frame}
                     type="button"
-                    onClick={() => setTimeframe(frame)}
-                    className={`rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] ${
-                      timeframe === frame
-                        ? 'bg-cyan-500/20 text-cyan-200'
-                        : 'text-slate-400 hover:text-slate-100'
-                    }`}
+                    onClick={() => setTimeframe(frame === '5m' ? '5m' : frame === '1h' ? '1h' : '1d')}
+                    className={`rounded px-2 py-1 ${timeframe === frame ? 'bg-[#173449] text-[#75e6da]' : 'text-slate-400'}`}
                   >
                     {frame}
                   </button>
                 ))}
+                <span className="text-slate-500">|</span>
+                <button className="text-slate-300">Indicators</button>
               </div>
-            </div>
-
-            <div className="h-[468px] overflow-hidden rounded border border-[#173449] bg-[#071521]">
-              {candleReady ? (
-                <OhlcViewport candles={pairVM.ohlcCandles} pairLabel={selectedPair?.pair || 'pair'} />
-              ) : (
-                <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                  Waiting for analytics stream and swap events...
-                </div>
-              )}
-            </div>
-            {pairVM.error ? <p className="mt-2 text-xs text-rose-300">{pairVM.error}</p> : null}
-          </div>
-        </section>
-
-        <section className={`${mobilePanel === 'trade' ? 'block' : 'hidden'} lg:block`}>
-          <div className="h-full space-y-2 rounded-lg border border-[#1a394a] bg-[#081423] p-2.5">
-            <WalletBadge chainId={chainId} />
-
-            <div className="rounded-lg border border-[#21384a] bg-[#081423] p-2">
-              <div className="mb-1 flex items-center gap-1">
-                {([
-                  ['book', 'Order Book'],
-                  ['trades', 'Trades']
-                ] as const).map(([tab, label]) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setBookTab(tab)}
-                    className={`rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${
-                      bookTab === tab
-                        ? 'bg-cyan-500/20 text-cyan-200'
-                        : 'text-slate-400 hover:text-slate-100'
-                    }`}
-                  >
-                    {label}
+              <div className="flex items-center gap-1">
+                {['◌', '⛶'].map((icon) => (
+                  <button key={icon} className="h-7 w-7 rounded border border-[#21445b] bg-[#0c1a29] text-xs text-slate-300">
+                    {icon}
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="grid h-[calc(100%-34px)] grid-cols-[30px_minmax(0,1fr)] gap-2">
+              <div className="flex flex-col items-center gap-2 rounded border border-[#183549] bg-[#08131f] py-2 text-[11px] text-slate-400">
+                {['＋', '／', '↕', '∿', '⌖', '◍', 'T'].map((tool) => (
+                  <button key={tool} className="h-6 w-6 rounded border border-[#21445b] bg-[#0b1723]">
+                    {tool}
+                  </button>
+                ))}
+              </div>
+              <div className="overflow-hidden rounded border border-[#183549] bg-[#08131f]">
+                <OhlcCanvas candles={pairVM.ohlcCandles} pairLabel={selectedPair?.pair || 'pair'} />
+              </div>
+            </div>
+            {pairVM.error ? <p className="mt-2 text-xs text-rose-300">{pairVM.error}</p> : null}
+          </section>
+
+          <section className={`${mobilePanel === 'trade' ? 'block' : 'hidden'} grid grid-cols-[minmax(0,1fr)_292px] gap-1 lg:grid`}>
+            <div className="rounded border border-[#173448] bg-[#0a1724] p-2">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex gap-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setBookTab('book')}
+                    className={`rounded px-2 py-1 ${bookTab === 'book' ? 'bg-[#173449] text-[#75e6da]' : 'text-slate-400'}`}
+                  >
+                    Order Book
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBookTab('trades')}
+                    className={`rounded px-2 py-1 ${bookTab === 'trades' ? 'bg-[#173449] text-[#75e6da]' : 'text-slate-400'}`}
+                  >
+                    Trades
+                  </button>
+                </div>
+                <div className="text-xs text-slate-500">{selectedPair?.token0 || '--'}</div>
+              </div>
 
               {bookTab === 'book' ? (
-                <div className="grid grid-cols-3 gap-2 text-[11px]">
-                  <div className="text-slate-500">Price</div>
-                  <div className="text-right text-slate-500">Size</div>
-                  <div className="text-right text-slate-500">Total</div>
+                <div className="text-xs">
+                  <div className="mb-1 flex items-center justify-between text-slate-500">
+                    <span>0.001</span>
+                    <span>{selectedPair?.token0 || ''}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-slate-500">
+                    <span>Price</span>
+                    <span className="text-right">Size</span>
+                    <span className="text-right">Total</span>
+                  </div>
 
-                  <div className="col-span-3 max-h-44 overflow-y-auto">
+                  <div className="mt-1 max-h-56 space-y-0.5 overflow-y-auto">
                     {orderbookVM.asks.map((level, idx) => {
-                      const depth = Math.min(100, (level.total / orderbookMaxAsk) * 100);
+                      const depth = Math.min(100, (safe(level.total) / askMax) * 100);
                       return (
                         <div key={`ask-${idx}`} className="relative grid grid-cols-3 gap-2 overflow-hidden py-0.5 text-rose-300">
                           <div className="absolute inset-y-0 right-0 bg-rose-500/10" style={{ width: `${depth}%` }} />
-                          <span className="relative">{level.price.toFixed(6)}</span>
+                          <span className="relative">{level.price.toFixed(3)}</span>
                           <span className="relative text-right">{shortAmount(level.size)}</span>
                           <span className="relative text-right">{shortAmount(level.total)}</span>
                         </div>
@@ -630,17 +614,17 @@ export function ProTerminal() {
                     })}
                   </div>
 
-                  <div className="col-span-3 rounded bg-[#07111e] px-2 py-1 text-center text-[11px] text-slate-300">
+                  <div className="my-1 rounded bg-[#111f2d] px-2 py-1 text-center text-[11px] text-slate-300">
                     Spread {shortAmount(orderbookVM.spread)}
                   </div>
 
-                  <div className="col-span-3 max-h-44 overflow-y-auto">
+                  <div className="max-h-56 space-y-0.5 overflow-y-auto">
                     {orderbookVM.bids.map((level, idx) => {
-                      const depth = Math.min(100, (level.total / orderbookMaxBid) * 100);
+                      const depth = Math.min(100, (safe(level.total) / bidMax) * 100);
                       return (
                         <div key={`bid-${idx}`} className="relative grid grid-cols-3 gap-2 overflow-hidden py-0.5 text-emerald-300">
                           <div className="absolute inset-y-0 right-0 bg-emerald-500/10" style={{ width: `${depth}%` }} />
-                          <span className="relative">{level.price.toFixed(6)}</span>
+                          <span className="relative">{level.price.toFixed(3)}</span>
                           <span className="relative text-right">{shortAmount(level.size)}</span>
                           <span className="relative text-right">{shortAmount(level.total)}</span>
                         </div>
@@ -649,129 +633,85 @@ export function ProTerminal() {
                   </div>
                 </div>
               ) : (
-                <div className="max-h-[340px] space-y-1 overflow-y-auto text-[11px]">
-                  {tradesVM.trades.slice(0, 80).map((trade) => (
-                    <div key={`trade-${trade.txHash}`} className="grid grid-cols-[54px_1fr_72px] rounded bg-[#07111e] px-2 py-1">
+                <div className="max-h-[490px] space-y-1 overflow-y-auto text-xs">
+                  {tradesVM.trades.slice(0, 120).map((trade) => (
+                    <div key={`${trade.txHash}-${trade.at}`} className="grid grid-cols-[56px_1fr_80px] rounded bg-[#111f2d] px-2 py-1">
                       <span className={trade.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>{trade.side}</span>
                       <span className="font-mono text-slate-200">{trade.price.toFixed(6)}</span>
                       <span className="text-right text-slate-400">{new Date(trade.at).toLocaleTimeString()}</span>
                     </div>
                   ))}
-                  {!tradesVM.trades.length ? <p className="px-2 py-3 text-center text-slate-400">No recent trades yet.</p> : null}
+                  {!tradesVM.trades.length ? <p className="py-3 text-center text-slate-400">No trades yet.</p> : null}
                 </div>
               )}
             </div>
 
-            <div className="rounded-lg border border-[#21384a] bg-[#081423] p-2">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Order Entry</p>
-                <div className="rounded border border-[#223f53] bg-[#07111e] p-1 text-[10px]">
+            <div className="rounded border border-[#173448] bg-[#0a1724] p-2">
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <div className="flex gap-1">
                   {(['market', 'limit'] as const).map((mode) => (
                     <button
                       key={mode}
                       type="button"
                       onClick={() => entryVM.setEntryMode(mode)}
-                      className={`rounded px-2 py-1 font-semibold uppercase tracking-[0.12em] ${
-                        entryVM.entryMode === mode
-                          ? 'bg-cyan-500/20 text-cyan-200'
-                          : 'text-slate-400 hover:text-slate-100'
-                      }`}
+                      className={`rounded px-2 py-1 uppercase ${entryVM.entryMode === mode ? 'bg-[#173449] text-[#75e6da]' : 'text-slate-400'}`}
                     >
                       {mode}
                     </button>
                   ))}
+                  <button className="rounded px-2 py-1 text-slate-400">Pro</button>
                 </div>
+                <span className="text-slate-500">⌄</span>
               </div>
 
-              <div className="mb-2 grid grid-cols-2 gap-1 rounded border border-[#223f53] bg-[#07111e] p-1 text-xs">
+              <div className="mb-2 grid grid-cols-2 gap-1 rounded border border-[#21445b] bg-[#0c1a29] p-1 text-xs">
                 <button
                   type="button"
                   onClick={() => entryVM.setSide('buy')}
-                  className={`rounded px-2 py-1.5 font-semibold ${
-                    entryVM.side === 'buy' ? 'bg-emerald-500/18 text-emerald-200' : 'text-slate-400 hover:text-slate-100'
-                  }`}
+                  className={`rounded px-2 py-1.5 font-semibold ${entryVM.side === 'buy' ? 'bg-[#58d4c8] text-[#052326]' : 'text-slate-300'}`}
                 >
                   Buy
                 </button>
                 <button
                   type="button"
                   onClick={() => entryVM.setSide('sell')}
-                  className={`rounded px-2 py-1.5 font-semibold ${
-                    entryVM.side === 'sell' ? 'bg-rose-500/18 text-rose-200' : 'text-slate-400 hover:text-slate-100'
-                  }`}
+                  className={`rounded px-2 py-1.5 font-semibold ${entryVM.side === 'sell' ? 'bg-[#7b2935] text-rose-100' : 'text-slate-300'}`}
                 >
                   Sell
                 </button>
               </div>
 
               <div className="space-y-2 text-xs">
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="space-y-1">
-                    <span className="text-slate-500">Token In</span>
-                    <input
-                      value={entryVM.tokenInSymbol}
-                      readOnly
-                      className="w-full rounded border border-[#223f53] bg-[#07111e] px-2 py-1.5 text-slate-100"
-                    />
-                  </label>
-                  <label className="space-y-1">
-                    <span className="text-slate-500">Token Out</span>
-                    <input
-                      value={entryVM.tokenOutSymbol}
-                      readOnly
-                      className="w-full rounded border border-[#223f53] bg-[#07111e] px-2 py-1.5 text-slate-100"
-                    />
-                  </label>
-                </div>
+                <p className="text-slate-400">
+                  Available to Trade <span className="float-right text-slate-200">{shortAmount(entryVM.availableBalance)} {entryVM.tokenInSymbol}</span>
+                </p>
 
                 <label className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500">Amount</span>
-                    <button
-                      type="button"
-                      onClick={entryVM.setMaxAmount}
-                      className="rounded border border-[#223f53] px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-cyan-200"
-                    >
-                      Max
-                    </button>
-                  </div>
+                  <span className="text-slate-500">Size</span>
                   <input
                     type="number"
                     min="0"
                     step="any"
                     value={entryVM.amount}
                     onChange={(event) => entryVM.setAmount(event.target.value)}
-                    className="w-full rounded border border-[#223f53] bg-[#07111e] px-2 py-1.5 text-slate-100"
+                    className="h-9 w-full rounded border border-[#21445b] bg-[#0c1a29] px-2 text-slate-100"
                   />
                 </label>
 
-                {entryVM.entryMode === 'limit' ? (
-                  <label className="space-y-1">
-                    <span className="text-slate-500">Limit Price</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="any"
-                      value={entryVM.limitPrice}
-                      onChange={(event) => entryVM.setLimitPrice(event.target.value)}
-                      className="w-full rounded border border-[#223f53] bg-[#07111e] px-2 py-1.5 text-slate-100"
-                    />
-                  </label>
-                ) : null}
-
-                <label className="space-y-1">
-                  <span className="text-slate-500">Slippage (bps)</span>
+                <div className="space-y-1">
                   <input
-                    type="number"
-                    min={1}
-                    max={3000}
-                    value={entryVM.slippageBps}
-                    onChange={(event) => entryVM.setSlippageBps(Number(event.target.value))}
-                    className="w-full rounded border border-[#223f53] bg-[#07111e] px-2 py-1.5 text-slate-100"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={sizePct}
+                    onChange={(event) => setSizePct(Number(event.target.value))}
+                    className="w-full accent-[#58d4c8]"
                   />
-                </label>
+                  <p className="text-right text-slate-400">{sizePct}%</p>
+                </div>
 
-                <label className="flex items-center gap-2 rounded border border-cyan-400/35 bg-cyan-500/8 px-2 py-1.5 text-[11px] text-cyan-100">
+                <label className="flex items-center gap-2 text-[11px] text-cyan-100">
                   <input
                     type="checkbox"
                     checked={entryVM.autoWrapNative}
@@ -780,89 +720,89 @@ export function ProTerminal() {
                   Auto-wrap native to {entryVM.wrappedNativeSymbol}
                 </label>
 
-                <div className="rounded border border-[#223f53] bg-[#07111e] px-2 py-1.5 text-[11px] text-slate-300">
-                  Available: {shortAmount(entryVM.availableBalance)} {entryVM.tokenInSymbol}
-                  <br />
-                  Native: {shortAmount(entryVM.nativeBalance)} {chainId === 97 ? 'tBNB' : 'gas'}
+                <button
+                  type="button"
+                  onClick={executePrimary}
+                  disabled={entryVM.executing}
+                  className="h-11 w-full rounded border border-[#5ee2d5] bg-[#58d4c8] text-sm font-semibold text-[#052326] disabled:opacity-60"
+                >
+                  {entryVM.executing
+                    ? 'Executing...'
+                    : !entryVM.isConnected
+                      ? 'Enable Trading'
+                      : entryVM.entryMode === 'market' && !entryVM.quote
+                        ? 'Get Quote'
+                        : 'Execute Trade'}
+                </button>
+
+                <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1.5 text-[11px] text-slate-300">
+                  <p className="flex justify-between"><span>Order Value</span><span>N/A</span></p>
+                  <p className="mt-0.5 flex justify-between"><span>Slippage</span><span>Est: 0% / Max: {(entryVM.slippageBps / 100).toFixed(2)}%</span></p>
+                  <p className="mt-0.5 flex justify-between"><span>Fees</span><span>{((entryVM.quote?.total_fee_bps ?? 30) / 10000 * 100).toFixed(4)}% / {((entryVM.quote?.protocol_fee_bps ?? 5) / 10000 * 100).toFixed(4)}%</span></p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={entryVM.requestQuote}
-                    disabled={entryVM.quoteLoading}
-                    className="rounded border border-cyan-400/70 bg-cyan-500/15 px-2 py-2 text-xs font-semibold text-cyan-200 disabled:opacity-50"
-                  >
-                    {entryVM.quoteLoading ? 'Quoting...' : 'Get Quote'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={entryVM.execute}
-                    disabled={entryVM.executing || !selectedPair}
-                    className="rounded border border-emerald-400/65 bg-emerald-500/15 px-2 py-2 text-xs font-semibold text-emerald-200 disabled:opacity-50"
-                  >
-                    {entryVM.executing
-                      ? 'Executing...'
-                      : entryVM.entryMode === 'market'
-                        ? 'Execute Market Swap'
-                        : 'Queue Limit Draft'}
-                  </button>
+                <button className="h-10 w-full rounded border border-[#5ee2d5] bg-[#58d4c8] text-sm font-semibold text-[#052326]">Deposit</button>
+                <div className="grid grid-cols-2 gap-1">
+                  <button className="h-8 rounded border border-[#21445b] bg-[#0c1a29] text-[11px] text-slate-200">Perps ↔ Spot</button>
+                  <button className="h-8 rounded border border-[#21445b] bg-[#0c1a29] text-[11px] text-slate-200">Withdraw</button>
+                </div>
+
+                <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1.5 text-[11px] text-slate-300">
+                  <p className="font-semibold text-slate-200">Account Equity</p>
+                  <p className="mt-1 flex justify-between"><span>Spot</span><span>$0.00</span></p>
+                  <p className="flex justify-between"><span>Perps</span><span>$0.00</span></p>
+                  <p className="flex justify-between"><span>Perps Overview</span><span>--</span></p>
                 </div>
 
                 {entryVM.quote ? (
-                  <div className="rounded border border-[#223f53] bg-[#07111e] px-2 py-1.5 text-[11px] text-slate-200">
-                    <p>
-                      Expected: {entryVM.quote.expected_out} {entryVM.quote.token_out}
-                    </p>
-                    <p>
-                      Min: {entryVM.quote.min_out} {entryVM.quote.token_out}
-                    </p>
+                  <div className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1 text-[11px] text-slate-300">
                     <p>Route: {entryVM.quote.route.join(' -> ')}</p>
-                    <p>
-                      Fee: {entryVM.quote.total_fee_bps ?? 30} bps ({entryVM.quote.lp_fee_bps ?? 25} LP /{' '}
-                      {entryVM.quote.protocol_fee_bps ?? 5} protocol)
-                    </p>
-                    {entryVM.staleQuote ? <p className="text-amber-300">Quote stale, refresh before execute.</p> : null}
+                    <p>Expected: {entryVM.quote.expected_out} {entryVM.quote.token_out}</p>
+                    <p>Minimum: {entryVM.quote.min_out} {entryVM.quote.token_out}</p>
+                    {entryVM.staleQuote ? <p className="text-amber-300">stale quote</p> : null}
                   </div>
                 ) : null}
 
-                {entryVM.error ? <p className="text-xs text-rose-300">{entryVM.error}</p> : null}
-                {entryVM.status ? <p className="text-xs text-cyan-200">{entryVM.status}</p> : null}
+                {entryVM.error ? <p className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">{entryVM.error}</p> : null}
+                {entryVM.status ? <p className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-200">{entryVM.status}</p> : null}
               </div>
             </div>
-          </div>
-        </section>
-      </div>
+          </section>
+        </div>
 
-      <section className={`${mobilePanel === 'account' ? 'block' : 'hidden'} mt-2 lg:block`}>
-        <div className="rounded-lg border border-[#1a394a] bg-[#081423] p-2.5">
-          <div className="mb-2 flex items-center gap-1">
+        <section className={`${mobilePanel === 'account' ? 'block' : 'hidden'} mt-1 rounded border border-[#173448] bg-[#0a1724] p-2 lg:block`}>
+          <div className="mb-2 flex flex-wrap items-center gap-1">
             {([
               ['balances', 'Balances'],
               ['positions', 'Positions'],
-              ['orders', 'Open Orders'],
-              ['history', 'Trade History']
+              ['open-orders', 'Open Orders'],
+              ['twap', 'TWAP'],
+              ['trade-history', 'Trade History'],
+              ['funding-history', 'Funding History'],
+              ['order-history', 'Order History']
             ] as const).map(([tab, label]) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setAccountTab(tab)}
-                className={`rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${
-                  accountTab === tab
-                    ? 'bg-cyan-500/20 text-cyan-200'
-                    : 'text-slate-400 hover:text-slate-100'
-                }`}
+                className={`rounded px-2 py-1 text-xs ${accountTab === tab ? 'bg-[#173449] text-[#75e6da]' : 'text-slate-400'}`}
               >
                 {label}
               </button>
             ))}
+            <div className="ml-auto flex items-center gap-2 text-[11px] text-slate-500">
+              <span>Send</span>
+              <span>Transfer</span>
+              <span>Repay</span>
+              <span>Contract</span>
+            </div>
           </div>
 
-          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_390px]">
-            <div className="rounded border border-[#173449] bg-[#06111d] p-2">
+          <div className="grid grid-cols-[minmax(0,1fr)_380px] gap-1">
+            <div className="rounded border border-[#183549] bg-[#08131f] p-2">
               {accountTab === 'balances' ? (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-xs">
+                  <table className="w-full min-w-[680px] text-xs">
                     <thead>
                       <tr className="text-left text-slate-500">
                         <th className="px-2 py-1">Coin</th>
@@ -872,98 +812,53 @@ export function ProTerminal() {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="border-t border-[#173449] text-slate-200">
+                      <tr className="border-t border-[#183549] text-slate-200">
                         <td className="px-2 py-1.5">Native {chainId === 97 ? 'tBNB' : 'gas token'}</td>
                         <td className="px-2 py-1.5 text-right font-mono">{shortAmount(entryVM.nativeBalance)}</td>
                         <td className="px-2 py-1.5 text-right font-mono">{shortAmount(entryVM.nativeBalance)}</td>
-                        <td className="px-2 py-1.5 text-right text-slate-400">n/a</td>
+                        <td className="px-2 py-1.5 text-right text-slate-500">n/a</td>
                       </tr>
                       {marketVM.chainTokens.map((token) => (
-                        <tr key={`bal-${token.address}-${token.symbol}`} className="border-t border-[#173449] text-slate-200">
+                        <tr key={`bal-${token.address}-${token.symbol}`} className="border-t border-[#183549] text-slate-200">
                           <td className="px-2 py-1.5">{token.symbol}</td>
                           <td className="px-2 py-1.5 text-right font-mono">{shortAmount(entryVM.walletBalances[token.symbol] || '0')}</td>
                           <td className="px-2 py-1.5 text-right font-mono">{shortAmount(entryVM.walletBalances[token.symbol] || '0')}</td>
-                          <td className="px-2 py-1.5 text-right text-slate-400">n/a</td>
+                          <td className="px-2 py-1.5 text-right text-slate-500">n/a</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-              ) : null}
-
-              {accountTab === 'positions' ? (
-                <div className="py-8 text-center text-xs text-slate-400">Spot-only movement. LP positions render in Liquidity/Pools.</div>
-              ) : null}
-
-              {accountTab === 'orders' ? (
-                <div className="max-h-56 space-y-1 overflow-y-auto">
-                  {entryVM.limitDrafts.slice(0, 24).map((draft) => (
-                    <div key={draft.id} className="rounded bg-[#0a1d2f] px-2 py-1 text-xs text-slate-200">
-                      <p>
-                        {draft.side.toUpperCase()} {draft.amount} {draft.token_out} with {draft.token_in} @ {draft.limit_price}
-                      </p>
-                      <p className="text-[11px] text-slate-400">{new Date(draft.created_at).toLocaleString()}</p>
-                    </div>
-                  ))}
-                  {!entryVM.limitDrafts.length ? <p className="py-6 text-center text-xs text-slate-400">No open local drafts.</p> : null}
-                </div>
-              ) : null}
-
-              {accountTab === 'history' ? (
-                <div className="max-h-56 space-y-1 overflow-y-auto">
-                  {tradesVM.trades.slice(0, 24).map((trade) => (
-                    <div key={`${trade.txHash}-${trade.at}`} className="rounded bg-[#0a1d2f] px-2 py-1 text-xs text-slate-200">
-                      <p>
-                        {trade.side.toUpperCase()} {shortAmount(trade.baseAmount)} {trade.baseToken} @ {trade.price.toFixed(6)}
-                      </p>
-                      <p className="text-[11px] text-slate-400">
-                        {new Date(trade.at).toLocaleString()} | fee ${shortAmount(trade.feeUsd)} | gas ${shortAmount(trade.gasUsd)}
-                      </p>
-                    </div>
-                  ))}
-                  {!tradesVM.trades.length ? <p className="py-6 text-center text-xs text-slate-400">No trade history yet.</p> : null}
-                </div>
-              ) : null}
+              ) : (
+                <div className="py-10 text-center text-xs text-slate-400">{accountTab} panel placeholder ready.</div>
+              )}
             </div>
 
-            <div className="rounded border border-[#173449] bg-[#06111d] p-2">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Portfolio Distribution</p>
-              <div className="h-48">
-                {marketVM.chainTokens.length ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={marketVM.chainTokens.map((token) => ({
-                        symbol: token.symbol,
-                        balance: Number(entryVM.walletBalances[token.symbol] || '0')
-                      }))}
-                      margin={{ top: 6, right: 8, left: 0, bottom: 20 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke="#173449" opacity={0.55} />
-                      <XAxis dataKey="symbol" stroke="#7d96ab" tick={{ fontSize: 10 }} />
-                      <YAxis stroke="#7d96ab" tick={{ fontSize: 10 }} />
-                      <Tooltip
-                        contentStyle={{ background: '#081423', border: '1px solid #1f3b52', borderRadius: '0.5rem' }}
-                        formatter={(value) => [shortAmount(String(value)), 'balance']}
-                      />
-                      <Bar dataKey="balance" fill="#2f76f6" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-slate-400">No token registry data.</div>
-                )}
-              </div>
-
-              <div className="mt-3 rounded border border-[#223f53] bg-[#07111e] px-2 py-1.5 text-[11px] text-slate-300">
-                Shortcuts: <span className="font-mono">/</span> search, <span className="font-mono">↑↓</span> pair,{' '}
-                <span className="font-mono">Enter</span> execute.
-                <br />
-                Security: wallet-signed trades only, no server-side custody.
-                {entryVM.canSwitchNetwork ? ' Wallet chain mismatch detected.' : ''}
+            <div className="rounded border border-[#183549] bg-[#08131f] p-2">
+              <p className="mb-1 text-xs text-slate-400">Recent Activity</p>
+              <div className="max-h-40 space-y-1 overflow-y-auto">
+                {tradesVM.trades.slice(0, 20).map((trade) => (
+                  <div key={`${trade.txHash}-${trade.at}`} className="rounded bg-[#101f2d] px-2 py-1 text-xs">
+                    <p className={trade.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>
+                      {trade.side.toUpperCase()} {shortAmount(trade.baseAmount)} {trade.baseToken}
+                    </p>
+                    <p className="text-[11px] text-slate-400">{new Date(trade.at).toLocaleString()}</p>
+                  </div>
+                ))}
+                {!tradesVM.trades.length ? <p className="px-2 py-3 text-xs text-slate-500">No activity yet.</p> : null}
               </div>
             </div>
           </div>
-        </div>
-      </section>
+
+          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+            <div className="flex items-center gap-2 rounded border border-[#204257] bg-[#0c1a29] px-2 py-1 text-[#71e4d9]">
+              <span className="h-2 w-2 rounded-full bg-[#59d8cc]" />
+              Online
+            </div>
+            <p>Shortcuts: / search, ↑↓ pair, Enter trade</p>
+          </div>
+        </section>
+      </main>
     </div>
   );
 }

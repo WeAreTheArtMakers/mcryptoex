@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Address, erc20Abi, formatUnits, isAddress, maxUint256, parseUnits } from 'viem';
 import { useAccount, usePublicClient, useSwitchChain, useWalletClient } from 'wagmi';
+import { ProTerminal } from '../pro/pro-terminal';
 import { WalletPanel } from '../../components/wallet-panel';
 
 const API_BASE = process.env.NEXT_PUBLIC_TEMPO_API_BASE || 'http://localhost:8500';
@@ -225,6 +226,19 @@ function reachableSymbols(graph: Map<string, Set<string>>, start: string): Set<s
 }
 
 export default function ExchangePage() {
+  const [uiMode, setUiMode] = useState<'classic' | 'pro'>('classic');
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if ((params.get('uiMode') || '').toLowerCase() === 'pro') {
+      setUiMode('pro');
+    }
+  }, []);
+
+  if (uiMode === 'pro') {
+    return <ProTerminal />;
+  }
+
   const [mode, setMode] = useState<'market' | 'limit' | 'transfer'>('market');
   const [chainId, setChainId] = useState<number>(DEFAULT_CHAIN_ID);
   const [networks, setNetworks] = useState<NetworkItem[]>(DEFAULT_NETWORKS);

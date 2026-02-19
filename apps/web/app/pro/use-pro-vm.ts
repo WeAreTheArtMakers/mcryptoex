@@ -611,7 +611,8 @@ export function useMarketListVM(chainId: number, searchQuery: string, filter: 'a
     }
 
     load();
-    const timer = window.setInterval(load, 12_000);
+    const marketPollMs = Math.max(1000, Number(process.env.NEXT_PUBLIC_PRO_MARKET_POLL_MS || '2500'));
+    const timer = window.setInterval(load, marketPollMs);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -684,7 +685,8 @@ export function useTradesVM(chainId: number, selectedPair: MarketRow | null) {
     }
 
     load();
-    const timer = window.setInterval(load, 8_000);
+    const tradesPollMs = Math.max(250, Number(process.env.NEXT_PUBLIC_PRO_TRADES_POLL_MS || '1000'));
+    const timer = window.setInterval(load, tradesPollMs);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -726,7 +728,8 @@ export function usePairVM(params: {
     }
 
     load();
-    const timer = window.setInterval(load, 12_000);
+    const analyticsPollMs = Math.max(1000, Number(process.env.NEXT_PUBLIC_PRO_ANALYTICS_POLL_MS || '3000'));
+    const timer = window.setInterval(load, analyticsPollMs);
     return () => {
       active = false;
       window.clearInterval(timer);
