@@ -74,6 +74,9 @@ class Settings:
     protocol_revenue_share_bps: int
     enable_simulation: bool
     simulation_interval_seconds: int
+    registry_refresh_seconds: int
+    pair_addresses_overridden: bool
+    stabilizer_addresses_overridden: bool
 
 
 @dataclass
@@ -91,6 +94,18 @@ def _csv_env(name: str) -> list[str]:
     if not raw:
         return []
     return [part.strip() for part in raw.split(',') if part.strip()]
+
+
+def _normalize_addresses(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for value in values:
+        candidate = str(value).strip()
+        if not candidate:
+            continue
+        if not Web3.is_address(candidate):
+            continue
+        normalized.append(Web3.to_checksum_address(candidate))
+    return normalized
 
 
 def _repo_root() -> Path:
@@ -170,13 +185,19 @@ def _settings_from_env() -> Settings:
     registry_pairs = _registry_addresses(chain_from_registry, 'pair_addresses')
     registry_stabilizers = _registry_addresses(chain_from_registry, 'stabilizer_addresses')
 
+    pair_override_raw = os.getenv('INDEXER_PAIR_ADDRESSES', '').strip()
+    pair_addresses_overridden = bool(pair_override_raw)
     pair_addresses = _csv_env('INDEXER_PAIR_ADDRESSES')
-    if not pair_addresses and registry_pairs:
+    if not pair_addresses_overridden and registry_pairs:
         pair_addresses = registry_pairs
+    pair_addresses = _normalize_addresses(pair_addresses)
 
+    stabilizer_override_raw = os.getenv('INDEXER_STABILIZER_ADDRESSES', '').strip()
+    stabilizer_addresses_overridden = bool(stabilizer_override_raw)
     stabilizer_addresses = _csv_env('INDEXER_STABILIZER_ADDRESSES')
-    if not stabilizer_addresses and registry_stabilizers:
+    if not stabilizer_addresses_overridden and registry_stabilizers:
         stabilizer_addresses = registry_stabilizers
+    stabilizer_addresses = _normalize_addresses(stabilizer_addresses)
 
     confirmation_depth_default = 0
     if isinstance(indexer_cfg, dict):
@@ -201,7 +222,10 @@ def _settings_from_env() -> Settings:
         swap_fee_bps=int(os.getenv('INDEXER_SWAP_FEE_BPS', '30')),
         protocol_revenue_share_bps=int(os.getenv('INDEXER_PROTOCOL_REVENUE_SHARE_BPS', '4000')),
         enable_simulation=os.getenv('INDEXER_ENABLE_SIMULATION', 'false').lower() == 'true',
-        simulation_interval_seconds=int(os.getenv('INDEXER_SIMULATION_INTERVAL_SECONDS', '20'))
+        simulation_interval_seconds=int(os.getenv('INDEXER_SIMULATION_INTERVAL_SECONDS', '20')),
+        registry_refresh_seconds=int(os.getenv('INDEXER_REGISTRY_REFRESH_SECONDS', '30')),
+        pair_addresses_overridden=pair_addresses_overridden,
+        stabilizer_addresses_overridden=stabilizer_addresses_overridden
     )
 
 
@@ -221,6 +245,13 @@ def _to_timestamp(seconds: int):
     return datetime.fromtimestamp(seconds, tz=timezone.utc)
 
 
+def _hex_prefixed(value: Any) -> str:
+    raw = value.hex() if hasattr(value, 'hex') else str(value)
+    if raw.startswith('0x'):
+        return raw
+    return f'0x{raw}'
+
+
 class ChainIndexer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -234,17 +265,22 @@ class ChainIndexer:
         self.web3: Web3 | None = None
         self.current_block: int | None = settings.start_block
 
-        self.swap_topic = Web3.keccak(text='Swap(address,uint256,uint256,uint256,uint256,address)').hex()
-        self.mint_topic = Web3.keccak(text='Mint(address,uint256,uint256)').hex()
-        self.burn_topic = Web3.keccak(text='Burn(address,uint256,uint256,address)').hex()
-        self.note_minted_topic = Web3.keccak(text='NoteMinted(address,address,uint256,uint256,uint256,address)').hex()
-        self.note_burned_topic = Web3.keccak(text='NoteBurned(address,address,uint256,uint256,uint256,address)').hex()
+        self.swap_topic = _hex_prefixed(Web3.keccak(text='Swap(address,uint256,uint256,uint256,uint256,address)'))
+        self.mint_topic = _hex_prefixed(Web3.keccak(text='Mint(address,uint256,uint256)'))
+        self.burn_topic = _hex_prefixed(Web3.keccak(text='Burn(address,uint256,uint256,address)'))
+        self.note_minted_topic = _hex_prefixed(
+            Web3.keccak(text='NoteMinted(address,address,uint256,uint256,uint256,address)')
+        )
+        self.note_burned_topic = _hex_prefixed(
+            Web3.keccak(text='NoteBurned(address,address,uint256,uint256,uint256,address)')
+        )
 
         self._pair_meta_cache: dict[str, PairMeta] = {}
         self._token_meta_cache: dict[str, tuple[str, int]] = {}
         self._tx_cost_cache: dict[str, tuple[str, str]] = {}
         self._block_ts_cache: dict[int, datetime] = {}
         self._last_simulated_at = 0.0
+        self._last_registry_refresh_at = 0.0
 
     def run(self) -> None:
         LOGGER.info(
@@ -266,6 +302,7 @@ class ChainIndexer:
 
         while True:
             try:
+                self._refresh_registry_watchlists()
                 if self.web3 is not None and (self.settings.pair_addresses or self.settings.stabilizer_addresses):
                     self._poll_chain_once()
                 self._maybe_emit_simulated_note()
@@ -275,6 +312,48 @@ class ChainIndexer:
 
             self.producer.poll(0)
             time.sleep(max(1, self.settings.poll_interval_seconds))
+
+    def _refresh_registry_watchlists(self, force: bool = False) -> None:
+        if self.settings.pair_addresses_overridden and self.settings.stabilizer_addresses_overridden:
+            return
+        if self.settings.registry_refresh_seconds <= 0 and not force:
+            return
+
+        now = time.time()
+        if not force and now - self._last_registry_refresh_at < self.settings.registry_refresh_seconds:
+            return
+        self._last_registry_refresh_at = now
+
+        chain_from_registry = _load_chain_from_registry(self.settings.chain_key)
+        if not chain_from_registry:
+            return
+
+        indexer_cfg = chain_from_registry.get('indexer', {})
+        if not isinstance(indexer_cfg, dict):
+            return
+
+        if not self.settings.pair_addresses_overridden:
+            registry_pairs = _normalize_addresses(_registry_addresses(chain_from_registry, 'pair_addresses'))
+            if registry_pairs != self.settings.pair_addresses:
+                LOGGER.info(
+                    'updating pair watchlist chain_key=%s old=%s new=%s',
+                    self.settings.chain_key,
+                    len(self.settings.pair_addresses),
+                    len(registry_pairs)
+                )
+                self.settings.pair_addresses = registry_pairs
+                self._pair_meta_cache.clear()
+
+        if not self.settings.stabilizer_addresses_overridden:
+            registry_stabilizers = _normalize_addresses(_registry_addresses(chain_from_registry, 'stabilizer_addresses'))
+            if registry_stabilizers != self.settings.stabilizer_addresses:
+                LOGGER.info(
+                    'updating stabilizer watchlist chain_key=%s old=%s new=%s',
+                    self.settings.chain_key,
+                    len(self.settings.stabilizer_addresses),
+                    len(registry_stabilizers)
+                )
+                self.settings.stabilizer_addresses = registry_stabilizers
 
     def _poll_chain_once(self) -> None:
         assert self.web3 is not None
@@ -313,7 +392,7 @@ class ChainIndexer:
         )
 
         for log in logs:
-            topic0 = log['topics'][0].hex()
+            topic0 = _hex_prefixed(log['topics'][0])
             if topic0 == self.swap_topic:
                 self._handle_swap_log(log)
             elif topic0 == self.mint_topic:
@@ -334,7 +413,7 @@ class ChainIndexer:
         )
 
         for log in logs:
-            topic0 = log['topics'][0].hex()
+            topic0 = _hex_prefixed(log['topics'][0])
             if topic0 == self.note_minted_topic:
                 self._handle_musd_mint_log(log)
             elif topic0 == self.note_burned_topic:

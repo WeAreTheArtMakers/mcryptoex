@@ -53,13 +53,24 @@ def tokens_payload() -> dict[str, Any]:
         tokens = chain.get('tokens') if isinstance(chain.get('tokens'), list) else []
         tokens_by_chain[chain_id_key] = tokens
 
+        contracts = chain.get('contracts') if isinstance(chain.get('contracts'), dict) else {}
+        network_health = chain.get('network_health') if isinstance(chain.get('network_health'), dict) else {}
+        pairs = chain.get('pairs') if isinstance(chain.get('pairs'), list) else []
+
         networks.append(
             {
                 'chain_id': chain_id,
                 'chain_key': str(chain.get('chain_key', '')),
                 'name': str(chain.get('name', chain_id_key)),
                 'network': str(chain.get('network', '')),
-                'token_count': len(tokens)
+                'token_count': len(tokens),
+                'pair_count': len(pairs),
+                'router_address': str(contracts.get('harmony_router', '')),
+                'factory_address': str(contracts.get('harmony_factory', '')),
+                'musd_address': str(contracts.get('musd', '')),
+                'stabilizer_address': str(contracts.get('stabilizer', '')),
+                'rpc_connected': bool(network_health.get('rpc_connected', False)),
+                'latest_checked_block': network_health.get('latest_block')
             }
         )
 

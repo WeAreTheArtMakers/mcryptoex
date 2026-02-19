@@ -69,6 +69,8 @@ Implemented controls:
   - Python syntax compile
   - tracked-secrets guard
   - Slither run (local binary if available, otherwise dockerized Slither)
+- Slither triage ledger:
+  - `docs/security/SLITHER_TRIAGE.md` (noise vs actionable classification with follow-ups)
 
 ## Audit readiness checklist
 

@@ -17,7 +17,7 @@ from .chain_registry import risk_assumptions_payload, tokens_payload
 from .compliance import enforce_optional_compliance
 from .config import get_settings
 from .proto_codec import ProtoCodec
-from .quote_engine import build_quote
+from .quote_engine import QuoteEngineError, build_quote
 
 settings = get_settings()
 
@@ -130,13 +130,16 @@ async def quote(
     country_code: str | None = Query(default=None, min_length=2, max_length=2)
 ) -> dict:
     enforce_optional_compliance(country_code=country_code, wallet_address=wallet_address)
-    return build_quote(
-        chain_id=chain_id,
-        token_in=token_in,
-        token_out=token_out,
-        amount_in=amount_in,
-        slippage_bps=slippage_bps
-    )
+    try:
+        return build_quote(
+            chain_id=chain_id,
+            token_in=token_in,
+            token_out=token_out,
+            amount_in=amount_in,
+            slippage_bps=slippage_bps
+        )
+    except QuoteEngineError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.get('/pairs')
