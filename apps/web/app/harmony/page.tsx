@@ -205,6 +205,9 @@ export default function HarmonyPage() {
   const [networks, setNetworks] = useState<NetworkItem[]>(DEFAULT_NETWORKS);
   const [tokenIn, setTokenIn] = useState<string>('WBNB');
   const [tokenOut, setTokenOut] = useState<string>('mUSD');
+  const [tokenInQuery, setTokenInQuery] = useState<string>('');
+  const [tokenOutQuery, setTokenOutQuery] = useState<string>('');
+  const [autoWrapNative, setAutoWrapNative] = useState(true);
   const [amountIn, setAmountIn] = useState<string>('0.1');
   const [slippageBps, setSlippageBps] = useState<number>(50);
   const [riskAssumptions, setRiskAssumptions] = useState<RiskAssumption[]>([]);
@@ -265,6 +268,20 @@ export default function HarmonyPage() {
   const wrappedNativeToken = useMemo(() => {
     return tokenBySymbolUpper.get(wrappedNativeSymbol.toUpperCase()) || null;
   }, [tokenBySymbolUpper, wrappedNativeSymbol]);
+  const filteredTokenInOptions = useMemo(() => {
+    const query = tokenInQuery.trim().toUpperCase();
+    if (!query) return chainTokens;
+    return chainTokens.filter((token) => {
+      return token.symbol.toUpperCase().includes(query) || token.name.toUpperCase().includes(query);
+    });
+  }, [chainTokens, tokenInQuery]);
+  const filteredTokenOutOptions = useMemo(() => {
+    const query = tokenOutQuery.trim().toUpperCase();
+    if (!query) return chainTokens;
+    return chainTokens.filter((token) => {
+      return token.symbol.toUpperCase().includes(query) || token.name.toUpperCase().includes(query);
+    });
+  }, [chainTokens, tokenOutQuery]);
 
   const musdSymbol = useMemo(() => {
     const musd = chainTokens.find((token) => token.symbol.toUpperCase() === 'MUSD');
@@ -400,6 +417,8 @@ export default function HarmonyPage() {
 
   function onChainChange(nextChainId: number) {
     setChainId(nextChainId);
+    setTokenInQuery('');
+    setTokenOutQuery('');
     const nextTokens = tokensByChain[String(nextChainId)] || DEFAULT_TOKENS;
     const nextMusd = nextTokens.find((token) => token.symbol.toUpperCase() === 'MUSD')?.symbol || 'mUSD';
     const nextIn = nextTokens.find((token) => token.symbol.toUpperCase() !== 'MUSD')?.symbol || nextTokens[0]?.symbol || 'WETH';
@@ -510,13 +529,49 @@ export default function HarmonyPage() {
       const router = routerAddress as Address;
 
       const tokenInBalance = walletBalances[tokenInInfo.symbol] || '0';
-      if (toDecimal(tokenInBalance) < toDecimal(amountIn)) {
+      const tokenInBalanceBase = parseUnits(clampAmountPrecision(tokenInBalance, tokenInInfo.decimals), tokenInInfo.decimals);
+      if (tokenInBalanceBase < amountInBase) {
         const isWrappedNative = tokenInInfo.symbol.toUpperCase() === wrappedNativeSymbol.toUpperCase();
-        if (isWrappedNative) {
+        if (isWrappedNative && autoWrapNative) {
+          if (!wrappedNativeToken || !isAddress(wrappedNativeToken.address)) {
+            setError(`Wrapped token ${wrappedNativeSymbol} is not configured for this chain.`);
+            return;
+          }
+          if (tokenInInfo.decimals !== 18) {
+            setError(`Auto-wrap requires 18 decimals for ${wrappedNativeSymbol}.`);
+            return;
+          }
+
+          const deficitRaw = amountInBase - tokenInBalanceBase;
+          const nativeRaw = await publicClient.getBalance({ address });
+          if (nativeRaw < deficitRaw) {
+            setError(
+              `Insufficient native ${chainId === 97 ? 'tBNB' : 'gas token'} balance for auto-wrap. Required ${shortAmount(
+                formatUnits(deficitRaw, 18)
+              )}.`
+            );
+            return;
+          }
+
+          setExecutionStatus(
+            `Auto-wrapping ${shortAmount(formatUnits(deficitRaw, 18))} ${chainId === 97 ? 'tBNB' : 'native'} to ${wrappedNativeSymbol}...`
+          );
+          const wrapHash = await walletClient.writeContract({
+            account: walletClient.account,
+            address: wrappedNativeToken.address as Address,
+            abi: wrappedNativeAbi,
+            functionName: 'deposit',
+            args: [],
+            value: deficitRaw,
+            gas: 180_000n
+          });
+          await publicClient.waitForTransactionReceipt({ hash: wrapHash });
+          setBalanceRefreshNonce((value) => value + 1);
+        } else if (isWrappedNative) {
           setError(
             `Insufficient ${tokenInInfo.symbol} balance. Wrap native ${
               chainId === 97 ? 'tBNB' : 'native gas token'
-            } first, then retry swap.`
+            } first, or enable auto-wrap.`
           );
         } else {
           setError(`Insufficient ${tokenInInfo.symbol} balance for this swap.`);
@@ -834,20 +889,39 @@ export default function HarmonyPage() {
                 onChange={(event) => setAmountIn(event.target.value)}
                 className="w-full rounded-xl border border-slateblue/80 bg-slate-950/80 px-3 py-2"
               />
+              <div className="flex items-center justify-between text-[11px] text-slate-300">
+                <span>
+                  Native: {shortAmount(nativeBalance)} | {wrappedNativeSymbol}: {shortAmount(walletBalances[wrappedNativeSymbol] || '0')}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAmountIn(shortAmount(walletBalances[tokenIn] || '0'))}
+                  className="rounded border border-slateblue/60 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-100"
+                >
+                  Max
+                </button>
+              </div>
             </label>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1">
               <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Token In</span>
+              <input
+                type="text"
+                value={tokenInQuery}
+                onChange={(event) => setTokenInQuery(event.target.value)}
+                placeholder="Search token..."
+                className="w-full rounded-xl border border-slateblue/60 bg-slate-950/70 px-3 py-1.5 text-xs"
+              />
               <select
                 value={tokenIn}
                 onChange={(event) => setTokenIn(event.target.value)}
                 className="w-full rounded-xl border border-slateblue/80 bg-slate-950/80 px-3 py-2"
               >
-                {chainTokens.map((token) => (
+                {(filteredTokenInOptions.length ? filteredTokenInOptions : chainTokens).map((token) => (
                   <option key={`${token.address}-${token.symbol}`} value={token.symbol}>
-                    {token.symbol}
+                    {token.symbol} - {token.name}
                   </option>
                 ))}
               </select>
@@ -855,14 +929,21 @@ export default function HarmonyPage() {
 
             <label className="space-y-1">
               <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Token Out</span>
+              <input
+                type="text"
+                value={tokenOutQuery}
+                onChange={(event) => setTokenOutQuery(event.target.value)}
+                placeholder="Search token..."
+                className="w-full rounded-xl border border-slateblue/60 bg-slate-950/70 px-3 py-1.5 text-xs"
+              />
               <select
                 value={tokenOut}
                 onChange={(event) => setTokenOut(event.target.value)}
                 className="w-full rounded-xl border border-slateblue/80 bg-slate-950/80 px-3 py-2"
               >
-                {chainTokens.map((token) => (
+                {(filteredTokenOutOptions.length ? filteredTokenOutOptions : chainTokens).map((token) => (
                   <option key={`${token.address}-${token.symbol}`} value={token.symbol}>
-                    {token.symbol}
+                    {token.symbol} - {token.name}
                   </option>
                 ))}
               </select>
@@ -889,6 +970,16 @@ export default function HarmonyPage() {
               onChange={(event) => setSlippageBps(Number(event.target.value))}
               className="w-full rounded-xl border border-slateblue/80 bg-slate-950/80 px-3 py-2"
             />
+          </label>
+          <label className="flex items-center gap-2 rounded-xl border border-cyan-300/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+            <input
+              type="checkbox"
+              checked={autoWrapNative}
+              onChange={(event) => setAutoWrapNative(event.target.checked)}
+              className="h-4 w-4 rounded border-cyan-300/70 bg-slate-900"
+            />
+            Auto-wrap native {chainId === 97 ? 'tBNB' : 'gas token'} to {wrappedNativeSymbol} if needed (wallet signs wrap +
+            swap)
           </label>
 
           <div className="flex flex-wrap gap-2">

@@ -27,6 +27,16 @@ const harmonyRouterAbi = [
   }
 ] as const;
 
+const wrappedNativeAbi = [
+  {
+    inputs: [],
+    name: 'deposit',
+    outputs: [],
+    stateMutability: 'payable',
+    type: 'function'
+  }
+] as const;
+
 type TokenItem = {
   symbol: string;
   name: string;
@@ -185,6 +195,9 @@ export default function ExchangePage() {
   const [tokensByChain, setTokensByChain] = useState<Record<string, TokenItem[]>>({});
   const [tokenIn, setTokenIn] = useState<string>('WBNB');
   const [tokenOut, setTokenOut] = useState<string>('mUSD');
+  const [tokenInQuery, setTokenInQuery] = useState<string>('');
+  const [tokenOutQuery, setTokenOutQuery] = useState<string>('');
+  const [autoWrapNative, setAutoWrapNative] = useState(true);
   const [amountIn, setAmountIn] = useState<string>('1');
   const [slippageBps, setSlippageBps] = useState<number>(50);
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
@@ -222,6 +235,31 @@ export default function ExchangePage() {
     for (const token of chainTokens) m.set(token.symbol.toUpperCase(), token);
     return m;
   }, [chainTokens]);
+  const wrappedNativeSymbol = useMemo(() => {
+    const wrapped = chainTokens.find((token) => {
+      const symbol = token.symbol.toUpperCase();
+      return symbol === 'WBNB' || symbol === 'WETH';
+    });
+    return wrapped?.symbol ?? (chainId === 97 ? 'WBNB' : 'WETH');
+  }, [chainId, chainTokens]);
+  const wrappedNativeToken = useMemo(
+    () => tokenMap.get(wrappedNativeSymbol.toUpperCase()) || null,
+    [tokenMap, wrappedNativeSymbol]
+  );
+  const filteredTokenInOptions = useMemo(() => {
+    const query = tokenInQuery.trim().toUpperCase();
+    if (!query) return chainTokens;
+    return chainTokens.filter((token) => {
+      return token.symbol.toUpperCase().includes(query) || token.name.toUpperCase().includes(query);
+    });
+  }, [chainTokens, tokenInQuery]);
+  const filteredTokenOutOptions = useMemo(() => {
+    const query = tokenOutQuery.trim().toUpperCase();
+    if (!query) return chainTokens;
+    return chainTokens.filter((token) => {
+      return token.symbol.toUpperCase().includes(query) || token.name.toUpperCase().includes(query);
+    });
+  }, [chainTokens, tokenOutQuery]);
   const selectedNetwork = useMemo(
     () => networks.find((network) => network.chain_id === chainId),
     [networks, chainId]
@@ -503,13 +541,52 @@ export default function ExchangePage() {
       const amountInBase = parseUnits(amountIn, tokenInInfo.decimals);
       const minOutBase = parseUnits(clampAmountPrecision(quote.min_out, tokenOutInfo.decimals), tokenOutInfo.decimals);
       const tokenInBalance = walletBalances[tokenInInfo.symbol] || '0';
-      if (n(tokenInBalance) < n(amountIn)) {
-        setMarketError(
-          `Insufficient ${tokenInInfo.symbol} balance. If you hold only native ${
-            chainId === 97 ? 'tBNB' : 'gas token'
-          }, wrap it first.`
-        );
-        return;
+      const tokenInBalanceBase = parseUnits(clampAmountPrecision(tokenInBalance, tokenInInfo.decimals), tokenInInfo.decimals);
+      if (tokenInBalanceBase < amountInBase) {
+        const isWrappedNative = tokenInInfo.symbol.toUpperCase() === wrappedNativeSymbol.toUpperCase();
+        if (isWrappedNative && autoWrapNative) {
+          if (!wrappedNativeToken || !isAddress(wrappedNativeToken.address)) {
+            setMarketError(`Wrapped token ${wrappedNativeSymbol} is not configured for this chain.`);
+            return;
+          }
+          if (tokenInInfo.decimals !== 18) {
+            setMarketError(`Auto-wrap requires 18 decimals for ${wrappedNativeSymbol}.`);
+            return;
+          }
+
+          const deficitRaw = amountInBase - tokenInBalanceBase;
+          const nativeRaw = await publicClient.getBalance({ address });
+          if (nativeRaw < deficitRaw) {
+            setMarketError(
+              `Insufficient native ${chainId === 97 ? 'tBNB' : 'gas token'} balance for auto-wrap. Required ${shortAmount(
+                formatUnits(deficitRaw, 18)
+              )}.`
+            );
+            return;
+          }
+
+          setMarketStatus(`Auto-wrapping ${shortAmount(formatUnits(deficitRaw, 18))} ${chainId === 97 ? 'tBNB' : 'native'} to ${wrappedNativeSymbol}...`);
+          const wrapHash = await walletClient.writeContract({
+            account: walletClient.account,
+            address: wrappedNativeToken.address as Address,
+            abi: wrappedNativeAbi,
+            functionName: 'deposit',
+            args: [],
+            value: deficitRaw,
+            gas: 180_000n
+          });
+          await publicClient.waitForTransactionReceipt({ hash: wrapHash });
+          setBalanceNonce((value) => value + 1);
+        } else {
+          setMarketError(
+            `Insufficient ${tokenInInfo.symbol} balance. ${
+              isWrappedNative
+                ? `Hold native ${chainId === 97 ? 'tBNB' : 'gas token'} and enable auto-wrap, or wrap manually first.`
+                : 'Fund this token before swap.'
+            }`
+          );
+          return;
+        }
       }
 
       setMarketStatus('Checking allowance...');
@@ -764,6 +841,8 @@ export default function ExchangePage() {
                     value={chainId}
                     onChange={(event) => {
                       setChainId(Number(event.target.value));
+                      setTokenInQuery('');
+                      setTokenOutQuery('');
                       setQuote(null);
                     }}
                     className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
@@ -785,33 +864,59 @@ export default function ExchangePage() {
                     onChange={(event) => setAmountIn(event.target.value)}
                     className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
                   />
+                  <div className="flex items-center justify-between text-[11px] text-slate-300">
+                    <span>
+                      Native: {shortAmount(nativeBalance)} | {wrappedNativeSymbol}: {shortAmount(walletBalances[wrappedNativeSymbol] || '0')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAmountIn(shortAmount(walletBalances[tokenIn] || '0'))}
+                      className="rounded border border-slateblue/60 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.12em] text-slate-100"
+                    >
+                      Max
+                    </button>
+                  </div>
                 </label>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <label className="space-y-1">
                   <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Token In</span>
+                  <input
+                    type="text"
+                    value={tokenInQuery}
+                    onChange={(event) => setTokenInQuery(event.target.value)}
+                    placeholder="Search token..."
+                    className="w-full rounded-lg border border-slateblue/50 bg-slate-950/65 px-3 py-1.5 text-xs"
+                  />
                   <select
                     value={tokenIn}
                     onChange={(event) => setTokenIn(event.target.value)}
                     className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
                   >
-                    {chainTokens.map((token) => (
+                    {(filteredTokenInOptions.length ? filteredTokenInOptions : chainTokens).map((token) => (
                       <option key={`in-${token.address}-${token.symbol}`} value={token.symbol}>
-                        {token.symbol}
+                        {token.symbol} - {token.name}
                       </option>
                     ))}
                   </select>
                 </label>
                 <label className="space-y-1">
                   <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Token Out</span>
+                  <input
+                    type="text"
+                    value={tokenOutQuery}
+                    onChange={(event) => setTokenOutQuery(event.target.value)}
+                    placeholder="Search token..."
+                    className="w-full rounded-lg border border-slateblue/50 bg-slate-950/65 px-3 py-1.5 text-xs"
+                  />
                   <select
                     value={tokenOut}
                     onChange={(event) => setTokenOut(event.target.value)}
                     className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
                   >
-                    {chainTokens.map((token) => (
+                    {(filteredTokenOutOptions.length ? filteredTokenOutOptions : chainTokens).map((token) => (
                       <option key={`out-${token.address}-${token.symbol}`} value={token.symbol}>
-                        {token.symbol}
+                        {token.symbol} - {token.name}
                       </option>
                     ))}
                   </select>
@@ -827,6 +932,16 @@ export default function ExchangePage() {
                   onChange={(event) => setSlippageBps(Number(event.target.value))}
                   className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
                 />
+              </label>
+              <label className="flex items-center gap-2 rounded-lg border border-cyan-300/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+                <input
+                  type="checkbox"
+                  checked={autoWrapNative}
+                  onChange={(event) => setAutoWrapNative(event.target.checked)}
+                  className="h-4 w-4 rounded border-cyan-300/70 bg-slate-900"
+                />
+                Auto-wrap native {chainId === 97 ? 'tBNB' : 'gas token'} to {wrappedNativeSymbol} if needed (wallet signs wrap
+                + swap)
               </label>
 
               <div className="flex flex-wrap gap-2">
