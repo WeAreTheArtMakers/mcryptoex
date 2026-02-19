@@ -9,6 +9,7 @@ export const metadata = {
 
 const navItems = [
   { href: '/overture', label: 'Overture' },
+  { href: '/exchange', label: 'Exchange Pro' },
   { href: '/harmony', label: 'Harmony Swap' },
   { href: '/liquidity', label: 'Liquidity' },
   { href: '/pools', label: 'Pools' },

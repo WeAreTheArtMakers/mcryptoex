@@ -183,11 +183,12 @@ If automated `open -a ...` fails with `kLSNoExecutableErr`, use manual steps:
 
 1. Open Chrome manually.
 2. Navigate to `http://localhost:3300/harmony`.
-3. Connect wallet (MetaMask/WalletConnect).
-4. Switch wallet network to target chain (31337 / 11155111 / 97).
-5. Select token pair (`token -> mUSD`), request quote.
-6. Review fee split and risk panel.
-7. Sign approval and swap transactions in wallet.
+3. For classic exchange workstation, navigate to `http://localhost:3300/exchange`.
+4. Connect wallet (MetaMask/WalletConnect).
+5. Switch wallet network to target chain (31337 / 11155111 / 97).
+6. Select token pair (`token -> mUSD`), request quote.
+7. Review fee split and risk panel.
+8. Sign approval and swap transactions in wallet.
 
 ## 13) Troubleshooting
 

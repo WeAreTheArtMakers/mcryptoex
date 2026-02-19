@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "generated_at": "2026-02-19T07:25:22.512670+00:00",
+  "generated_at": "2026-02-19T07:33:29.992029+00:00",
   "source": "packages/contracts/deploy/address-registry.*.json + live-rpc-pair-discovery",
   "chains": [
     {
@@ -37,7 +37,7 @@
       "network_health": {
         "rpc_connected": false,
         "latest_block": null,
-        "checked_at": "2026-02-19T07:25:22.512670+00:00",
+        "checked_at": "2026-02-19T07:33:29.992029+00:00",
         "discovery_status": "error: rpc call failed via urllib and curl: HTTP Error 502: Bad Gateway; curl=curl: (6) Could not resolve host: host.docker.internal"
       },
       "tokens": [
@@ -85,7 +85,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -95,7 +95,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -105,7 +105,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -142,8 +142,8 @@
       "pairs": [],
       "network_health": {
         "rpc_connected": true,
-        "latest_block": 10291212,
-        "checked_at": "2026-02-19T07:25:22.512670+00:00",
+        "latest_block": 10291251,
+        "checked_at": "2026-02-19T07:33:29.992029+00:00",
         "discovery_status": "factory-not-configured"
       },
       "tokens": [
@@ -184,7 +184,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -194,7 +194,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -204,7 +204,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -233,7 +233,8 @@
       },
       "indexer": {
         "pair_addresses": [
-          "0xd1d8ffc3456e4239f26e66210afc87cbb1ec2a80"
+          "0xd1d8ffc3456e4239f26e66210afc87cbb1ec2a80",
+          "0xbf14d836623806643627ff6a88433fc504bd23c2"
         ],
         "stabilizer_addresses": [
           "0xa8Ed74cf4aBfF6c7015114228504474B7602e311"
@@ -256,15 +257,28 @@
           "reserve0_decimal": "30",
           "reserve1_decimal": "0.05",
           "reserve_block_timestamp": 1771485907,
-          "checked_at": "2026-02-19T07:25:22.512670+00:00"
+          "checked_at": "2026-02-19T07:33:29.992029+00:00"
+        },
+        {
+          "pair_address": "0xbf14d836623806643627ff6a88433fc504bd23c2",
+          "token0_address": "0x63a3530a1cb7cc64f1d40a32c7d08d82226e9163",
+          "token1_address": "0x64544969ed7ebf5f083679233325356ebe738930",
+          "token0_symbol": "mUSD",
+          "token1_symbol": "USDC",
+          "reserve0_raw": "2000000000000000000",
+          "reserve1_raw": "2000000000000000000",
+          "reserve0_decimal": "2",
+          "reserve1_decimal": "2",
+          "reserve_block_timestamp": 1771486402,
+          "checked_at": "2026-02-19T07:33:29.992029+00:00"
         }
       ],
       "network_health": {
         "rpc_connected": true,
-        "latest_block": 91225526,
-        "checked_at": "2026-02-19T07:25:22.512670+00:00",
+        "latest_block": 91226610,
+        "checked_at": "2026-02-19T07:33:29.992029+00:00",
         "discovery_status": "ok",
-        "discovered_pairs": 1,
+        "discovered_pairs": 2,
         "factory_address": "0x4Cf971c2FfC33B0eFCe9C499303Fca8Fb3bd6EA4"
       },
       "tokens": [
@@ -326,7 +340,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -336,7 +350,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -346,7 +360,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
+          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],

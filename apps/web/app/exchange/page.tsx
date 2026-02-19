@@ -1,0 +1,848 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Address, erc20Abi, formatUnits, isAddress, maxUint256, parseUnits } from 'viem';
+import { useAccount, usePublicClient, useSwitchChain, useWalletClient } from 'wagmi';
+import { WalletPanel } from '../../components/wallet-panel';
+
+const API_BASE = process.env.NEXT_PUBLIC_TEMPO_API_BASE || 'http://localhost:8500';
+const LOCAL_CHAIN_ENABLED = process.env.NEXT_PUBLIC_ENABLE_LOCAL_CHAIN === 'true';
+const ENV_DEFAULT_CHAIN_ID = Number(process.env.NEXT_PUBLIC_DEFAULT_CHAIN_ID || (LOCAL_CHAIN_ENABLED ? '31337' : '97'));
+const DEFAULT_CHAIN_ID = Number.isFinite(ENV_DEFAULT_CHAIN_ID) ? ENV_DEFAULT_CHAIN_ID : LOCAL_CHAIN_ENABLED ? 31337 : 97;
+
+const harmonyRouterAbi = [
+  {
+    inputs: [
+      { internalType: 'uint256', name: 'amountIn', type: 'uint256' },
+      { internalType: 'uint256', name: 'amountOutMin', type: 'uint256' },
+      { internalType: 'address[]', name: 'path', type: 'address[]' },
+      { internalType: 'address', name: 'to', type: 'address' },
+      { internalType: 'uint256', name: 'deadline', type: 'uint256' }
+    ],
+    name: 'swapExactTokensForTokens',
+    outputs: [{ internalType: 'uint256[]', name: 'amounts', type: 'uint256[]' }],
+    stateMutability: 'nonpayable',
+    type: 'function'
+  }
+] as const;
+
+type TokenItem = {
+  symbol: string;
+  name: string;
+  address: string;
+  decimals: number;
+};
+
+type NetworkItem = {
+  chain_id: number;
+  chain_key: string;
+  name: string;
+  router_address?: string;
+  swap_fee_bps?: number;
+  protocol_fee_bps?: number;
+  pair_count?: number;
+};
+
+type TokensResponse = {
+  chains: Record<string, TokenItem[]>;
+  networks?: NetworkItem[];
+};
+
+type QuoteResponse = {
+  chain_id: number;
+  token_in: string;
+  token_out: string;
+  amount_in: string;
+  expected_out: string;
+  min_out: string;
+  route: string[];
+  route_depth?: string;
+  total_fee_bps?: number;
+  protocol_fee_bps?: number;
+  lp_fee_bps?: number;
+  protocol_fee_amount_in?: string;
+};
+
+type AnalyticsRow = {
+  bucket: string;
+  chain_id: number | string;
+  volume?: string;
+  revenue_usd?: string;
+};
+
+type AnalyticsResponse = {
+  volume_by_chain_token: AnalyticsRow[];
+  fee_revenue: AnalyticsRow[];
+};
+
+type ChartPoint = {
+  bucket: string;
+  label: string;
+  volume: number;
+  fees: number;
+};
+
+type LimitOrderDraft = {
+  id: string;
+  chain_id: number;
+  side: 'buy' | 'sell';
+  token_in: string;
+  token_out: string;
+  amount: string;
+  limit_price: string;
+  created_at: string;
+};
+
+const DEFAULT_NETWORKS: NetworkItem[] = [
+  { chain_id: 97, chain_key: 'bnb-testnet', name: 'BNB Testnet' },
+  { chain_id: 11155111, chain_key: 'ethereum-sepolia', name: 'Ethereum Sepolia' }
+];
+
+function n(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function shortAmount(value: string): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return value;
+  if (parsed === 0) return '0';
+  if (parsed < 0.000001) return parsed.toExponential(2);
+  return parsed.toFixed(6).replace(/\.?0+$/, '');
+}
+
+function extractDetail(status: number, payload: unknown): string {
+  if (payload && typeof payload === 'object') {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail;
+    }
+  }
+  return `request failed: ${status}`;
+}
+
+export default function ExchangePage() {
+  const [mode, setMode] = useState<'market' | 'limit' | 'transfer'>('market');
+  const [chainId, setChainId] = useState<number>(DEFAULT_CHAIN_ID);
+  const [networks, setNetworks] = useState<NetworkItem[]>(DEFAULT_NETWORKS);
+  const [tokensByChain, setTokensByChain] = useState<Record<string, TokenItem[]>>({});
+  const [tokenIn, setTokenIn] = useState<string>('WBNB');
+  const [tokenOut, setTokenOut] = useState<string>('mUSD');
+  const [amountIn, setAmountIn] = useState<string>('1');
+  const [slippageBps, setSlippageBps] = useState<number>(50);
+  const [quote, setQuote] = useState<QuoteResponse | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [marketStatus, setMarketStatus] = useState<string>('');
+  const [marketError, setMarketError] = useState<string>('');
+
+  const [limitSide, setLimitSide] = useState<'buy' | 'sell'>('sell');
+  const [limitPrice, setLimitPrice] = useState<string>('1');
+  const [limitAmount, setLimitAmount] = useState<string>('1');
+  const [limitOrders, setLimitOrders] = useState<LimitOrderDraft[]>([]);
+  const [ticketStatus, setTicketStatus] = useState<string>('');
+
+  const [transferToken, setTransferToken] = useState<string>('mUSD');
+  const [transferTo, setTransferTo] = useState<string>('');
+  const [transferAmount, setTransferAmount] = useState<string>('0.1');
+  const [transferring, setTransferring] = useState(false);
+
+  const [analytics, setAnalytics] = useState<ChartPoint[]>([]);
+  const [analyticsError, setAnalyticsError] = useState<string>('');
+  const [walletBalances, setWalletBalances] = useState<Record<string, string>>({});
+  const [balanceNonce, setBalanceNonce] = useState(0);
+
+  const { address, chainId: walletChainId, isConnected } = useAccount();
+  const publicClient = usePublicClient({ chainId });
+  const { data: walletClient } = useWalletClient({ chainId });
+  const { chains, switchChain, isPending: isSwitching } = useSwitchChain();
+
+  const chainTokens = useMemo(() => tokensByChain[String(chainId)] || [], [tokensByChain, chainId]);
+  const tokenMap = useMemo(() => {
+    const m = new Map<string, TokenItem>();
+    for (const token of chainTokens) m.set(token.symbol.toUpperCase(), token);
+    return m;
+  }, [chainTokens]);
+  const selectedNetwork = useMemo(
+    () => networks.find((network) => network.chain_id === chainId),
+    [networks, chainId]
+  );
+  const limitStorageKey = `mcryptoex.limit-orders.v1.${chainId}`;
+  const latestPoint = analytics.length ? analytics[analytics.length - 1] : null;
+
+  useEffect(() => {
+    let active = true;
+    async function loadTokens() {
+      try {
+        const res = await fetch(`${API_BASE}/tokens`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`token registry unavailable (${res.status})`);
+        const payload = (await res.json()) as TokensResponse;
+        if (!active) return;
+        setTokensByChain(payload.chains || {});
+        if (payload.networks?.length) setNetworks(payload.networks);
+      } catch (error) {
+        if (!active) return;
+        setMarketError(error instanceof Error ? error.message : 'token registry unavailable');
+      }
+    }
+    loadTokens();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!chainTokens.length) return;
+    if (!chainTokens.some((token) => token.symbol === tokenIn)) {
+      const fallback = chainTokens.find((token) => token.symbol.toUpperCase() !== 'MUSD') || chainTokens[0];
+      if (fallback) setTokenIn(fallback.symbol);
+    }
+    if (!chainTokens.some((token) => token.symbol === tokenOut)) {
+      const fallback = chainTokens.find((token) => token.symbol.toUpperCase() === 'MUSD') || chainTokens[0];
+      if (fallback) setTokenOut(fallback.symbol);
+    }
+    if (!chainTokens.some((token) => token.symbol === transferToken)) {
+      setTransferToken(chainTokens[0].symbol);
+    }
+  }, [chainTokens, tokenIn, tokenOut, transferToken]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadAnalytics() {
+      try {
+        const res = await fetch(`${API_BASE}/analytics?minutes=360`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`analytics unavailable (${res.status})`);
+        const payload = (await res.json()) as AnalyticsResponse;
+        if (!active) return;
+
+        const map = new Map<string, ChartPoint>();
+        for (const row of payload.volume_by_chain_token || []) {
+          if (Number(row.chain_id) !== chainId) continue;
+          const existing = map.get(row.bucket) || {
+            bucket: row.bucket,
+            label: new Date(row.bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            volume: 0,
+            fees: 0
+          };
+          existing.volume += n(row.volume);
+          map.set(row.bucket, existing);
+        }
+        for (const row of payload.fee_revenue || []) {
+          if (Number(row.chain_id) !== chainId) continue;
+          const existing = map.get(row.bucket) || {
+            bucket: row.bucket,
+            label: new Date(row.bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            volume: 0,
+            fees: 0
+          };
+          existing.fees += n(row.revenue_usd);
+          map.set(row.bucket, existing);
+        }
+        setAnalytics(Array.from(map.values()).sort((a, b) => a.bucket.localeCompare(b.bucket)).slice(-120));
+        setAnalyticsError('');
+      } catch (error) {
+        if (!active) return;
+        setAnalyticsError(error instanceof Error ? error.message : 'analytics unavailable');
+      }
+    }
+    loadAnalytics();
+    const interval = setInterval(loadAnalytics, 20_000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [chainId]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadBalances() {
+      if (!address || !publicClient) {
+        setWalletBalances({});
+        return;
+      }
+      const next: Record<string, string> = {};
+      for (const token of chainTokens) {
+        if (!isAddress(token.address)) continue;
+        try {
+          const raw = (await publicClient.readContract({
+            address: token.address as Address,
+            abi: erc20Abi,
+            functionName: 'balanceOf',
+            args: [address]
+          })) as bigint;
+          next[token.symbol] = formatUnits(raw, token.decimals);
+        } catch {
+          next[token.symbol] = '0';
+        }
+      }
+      if (active) setWalletBalances(next);
+    }
+    loadBalances();
+    return () => {
+      active = false;
+    };
+  }, [address, publicClient, chainTokens, balanceNonce]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(limitStorageKey);
+      if (!raw) {
+        setLimitOrders([]);
+        return;
+      }
+      const parsed = JSON.parse(raw) as LimitOrderDraft[];
+      setLimitOrders(Array.isArray(parsed) ? parsed.slice(0, 20) : []);
+    } catch {
+      setLimitOrders([]);
+    }
+  }, [limitStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(limitStorageKey, JSON.stringify(limitOrders.slice(0, 20)));
+  }, [limitStorageKey, limitOrders]);
+
+  async function requestQuote() {
+    setQuote(null);
+    setMarketError('');
+    setMarketStatus('');
+
+    if (!amountIn || Number(amountIn) <= 0) {
+      setMarketError('amount_in must be greater than zero');
+      return;
+    }
+    if (tokenIn.toUpperCase() === tokenOut.toUpperCase()) {
+      setMarketError('token_in and token_out cannot be the same');
+      return;
+    }
+
+    try {
+      setQuoteLoading(true);
+      const params = new URLSearchParams({
+        chain_id: String(chainId),
+        token_in: tokenIn,
+        token_out: tokenOut,
+        amount_in: amountIn,
+        slippage_bps: String(slippageBps)
+      });
+      if (address) params.set('wallet_address', address);
+      const res = await fetch(`${API_BASE}/quote?${params.toString()}`, { cache: 'no-store' });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(extractDetail(res.status, body));
+      }
+      setQuote(body as QuoteResponse);
+    } catch (error) {
+      setMarketError(error instanceof Error ? error.message : 'quote request failed');
+    } finally {
+      setQuoteLoading(false);
+    }
+  }
+
+  async function executeMarketSwap() {
+    setMarketStatus('');
+    setMarketError('');
+    if (!quote) {
+      setMarketError('Request quote first.');
+      return;
+    }
+    if (!isConnected || !address) {
+      setMarketError('Connect wallet first.');
+      return;
+    }
+    if (walletChainId !== chainId) {
+      setMarketError(`Wallet network mismatch. Switch wallet to chain ${chainId}.`);
+      return;
+    }
+    if (!publicClient || !walletClient) {
+      setMarketError('Wallet client not ready.');
+      return;
+    }
+    if (!selectedNetwork?.router_address || !isAddress(selectedNetwork.router_address)) {
+      setMarketError('Router address is missing in chain registry.');
+      return;
+    }
+
+    const routeTokens = quote.route
+      .map((symbol) => tokenMap.get(symbol.toUpperCase()))
+      .filter((item): item is TokenItem => Boolean(item));
+    if (routeTokens.length !== quote.route.length) {
+      setMarketError('Route token mapping failed for registry symbols.');
+      return;
+    }
+    const path: Address[] = [];
+    for (const token of routeTokens) {
+      if (!isAddress(token.address)) {
+        setMarketError(`Token ${token.symbol} is non-EVM in registry.`);
+        return;
+      }
+      path.push(token.address as Address);
+    }
+
+    const tokenInInfo = routeTokens[0];
+    const tokenOutInfo = routeTokens[routeTokens.length - 1];
+    const router = selectedNetwork.router_address as Address;
+
+    try {
+      const amountInBase = parseUnits(amountIn, tokenInInfo.decimals);
+      const minOutBase = parseUnits(quote.min_out, tokenOutInfo.decimals);
+
+      setMarketStatus('Checking allowance...');
+      const allowance = (await publicClient.readContract({
+        address: tokenInInfo.address as Address,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [address, router]
+      })) as bigint;
+
+      if (allowance < amountInBase) {
+        setMarketStatus('Approving token allowance...');
+        const approveHash = await walletClient.writeContract({
+          account: walletClient.account,
+          address: tokenInInfo.address as Address,
+          abi: erc20Abi,
+          functionName: 'approve',
+          args: [router, maxUint256]
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      }
+
+      setMarketStatus('Submitting swap transaction...');
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1_200);
+      const swapHash = await walletClient.writeContract({
+        account: walletClient.account,
+        address: router,
+        abi: harmonyRouterAbi,
+        functionName: 'swapExactTokensForTokens',
+        args: [amountInBase, minOutBase, path, address, deadline]
+      });
+      setMarketStatus(`Swap tx sent: ${swapHash}`);
+      await publicClient.waitForTransactionReceipt({ hash: swapHash });
+      setMarketStatus(`Swap confirmed: ${swapHash}`);
+      setBalanceNonce((value) => value + 1);
+    } catch (error) {
+      setMarketError(error instanceof Error ? error.message : 'Swap failed');
+    }
+  }
+
+  function queueLimitDraft() {
+    setTicketStatus('');
+    if (Number(limitPrice) <= 0 || Number(limitAmount) <= 0) {
+      setTicketStatus('Limit price and amount must be greater than zero.');
+      return;
+    }
+    const id =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const next: LimitOrderDraft = {
+      id,
+      chain_id: chainId,
+      side: limitSide,
+      token_in: tokenIn,
+      token_out: tokenOut,
+      amount: limitAmount,
+      limit_price: limitPrice,
+      created_at: new Date().toISOString()
+    };
+    setLimitOrders((orders) => [next, ...orders].slice(0, 20));
+    setTicketStatus('Limit order draft queued locally. Execution movement is next.');
+  }
+
+  async function executeTransfer() {
+    setTicketStatus('');
+    if (!isConnected || !address) {
+      setTicketStatus('Connect wallet before transfer.');
+      return;
+    }
+    if (walletChainId !== chainId) {
+      setTicketStatus(`Wallet network mismatch. Switch wallet to chain ${chainId}.`);
+      return;
+    }
+    if (!publicClient || !walletClient) {
+      setTicketStatus('Wallet client not ready.');
+      return;
+    }
+    if (!isAddress(transferTo)) {
+      setTicketStatus('Recipient address is invalid.');
+      return;
+    }
+    if (!transferAmount || Number(transferAmount) <= 0) {
+      setTicketStatus('Transfer amount must be greater than zero.');
+      return;
+    }
+    const token = tokenMap.get(transferToken.toUpperCase());
+    if (!token || !isAddress(token.address)) {
+      setTicketStatus('Token not transferable on this chain.');
+      return;
+    }
+
+    try {
+      setTransferring(true);
+      const amountRaw = parseUnits(transferAmount, token.decimals);
+      const txHash = await walletClient.writeContract({
+        account: walletClient.account,
+        address: token.address as Address,
+        abi: erc20Abi,
+        functionName: 'transfer',
+        args: [transferTo as Address, amountRaw]
+      });
+      setTicketStatus(`Transfer submitted: ${txHash}`);
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      setTicketStatus(`Transfer confirmed: ${txHash}`);
+      setBalanceNonce((value) => value + 1);
+    } catch (error) {
+      setTicketStatus(error instanceof Error ? error.message : 'Token transfer failed');
+    } finally {
+      setTransferring(false);
+    }
+  }
+
+  const canPromptSwitch =
+    isConnected &&
+    typeof walletChainId === 'number' &&
+    walletChainId !== chainId &&
+    chains.some((chain) => chain.id === chainId);
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1.7fr_1fr]">
+      <section className="space-y-4 rounded-3xl border border-slateblue/70 bg-gradient-to-br from-[#101e39]/95 via-[#102241]/90 to-[#17335a]/80 p-5 shadow-halo">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-brass">Exchange Movement</p>
+            <h2 className="text-2xl font-semibold">Market / Limit / Transfer Desk</h2>
+          </div>
+          <div className="rounded-xl border border-slateblue/70 bg-slate-950/60 px-3 py-2 text-xs text-slate-200">
+            Chain {chainId} | Pools {selectedNetwork?.pair_count ?? 'n/a'}
+          </div>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="rounded-xl border border-mint/45 bg-mint/10 p-3">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-mint">Volume (1m latest)</p>
+            <p className="mt-1 font-mono">{latestPoint ? latestPoint.volume.toFixed(4) : 'n/a'}</p>
+          </div>
+          <div className="rounded-xl border border-brass/45 bg-brass/10 p-3">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-amber-100">Fees USD (1m latest)</p>
+            <p className="mt-1 font-mono">{latestPoint ? latestPoint.fees.toFixed(4) : 'n/a'}</p>
+          </div>
+          <div className="rounded-xl border border-cyan-300/40 bg-cyan-500/10 p-3">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-cyan-100">Route Target</p>
+            <p className="mt-1 font-mono">{tokenIn} -&gt; {tokenOut}</p>
+          </div>
+        </div>
+
+        <div className="h-64 rounded-2xl border border-slateblue/65 bg-[#081223]/75 p-2">
+          {analytics.length ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={analytics}>
+                <defs>
+                  <linearGradient id="chartVolumeFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#34d399" stopOpacity={0.45} />
+                    <stop offset="95%" stopColor="#34d399" stopOpacity={0.04} />
+                  </linearGradient>
+                  <linearGradient id="chartFeesFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.03} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.45} />
+                <XAxis dataKey="label" stroke="#cbd5e1" tick={{ fontSize: 11 }} minTickGap={20} />
+                <YAxis yAxisId="left" stroke="#86efac" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="right" orientation="right" stroke="#fcd34d" tick={{ fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                  labelStyle={{ color: '#f8fafc' }}
+                  formatter={(value, name) => [n(value).toFixed(6), String(name)]}
+                />
+                <Area yAxisId="left" type="monotone" dataKey="volume" stroke="#34d399" fill="url(#chartVolumeFill)" strokeWidth={2} />
+                <Area yAxisId="right" type="monotone" dataKey="fees" stroke="#f59e0b" fill="url(#chartFeesFill)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-full items-center justify-center text-sm text-slate-300">Waiting for analytics stream...</div>
+          )}
+        </div>
+        {analyticsError ? <p className="text-xs text-rose-300">{analyticsError}</p> : null}
+
+        <div className="rounded-2xl border border-slateblue/65 bg-slate-950/55 p-4">
+          <div className="grid grid-cols-3 gap-2">
+            {(['market', 'limit', 'transfer'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setMode(tab)}
+                className={`rounded-lg border px-2 py-2 text-xs font-semibold uppercase tracking-[0.12em] ${
+                  mode === tab
+                    ? 'border-mint/70 bg-mint/20 text-mint'
+                    : 'border-slateblue/65 bg-slate-900/55 text-slate-200 hover:border-slateblue'
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          {mode === 'market' ? (
+            <div className="mt-3 space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Chain</span>
+                  <select
+                    value={chainId}
+                    onChange={(event) => {
+                      setChainId(Number(event.target.value));
+                      setQuote(null);
+                    }}
+                    className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                  >
+                    {networks.map((network) => (
+                      <option key={network.chain_id} value={network.chain_id}>
+                        {network.name} ({network.chain_id})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Amount</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={amountIn}
+                    onChange={(event) => setAmountIn(event.target.value)}
+                    className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                  />
+                </label>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Token In</span>
+                  <select
+                    value={tokenIn}
+                    onChange={(event) => setTokenIn(event.target.value)}
+                    className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                  >
+                    {chainTokens.map((token) => (
+                      <option key={`in-${token.address}-${token.symbol}`} value={token.symbol}>
+                        {token.symbol}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Token Out</span>
+                  <select
+                    value={tokenOut}
+                    onChange={(event) => setTokenOut(event.target.value)}
+                    className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                  >
+                    {chainTokens.map((token) => (
+                      <option key={`out-${token.address}-${token.symbol}`} value={token.symbol}>
+                        {token.symbol}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label className="space-y-1">
+                <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Slippage (bps)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={3000}
+                  value={slippageBps}
+                  onChange={(event) => setSlippageBps(Number(event.target.value))}
+                  className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                />
+              </label>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={requestQuote}
+                  disabled={quoteLoading}
+                  className="rounded-lg border border-mint/65 bg-mint/20 px-4 py-2 text-sm font-semibold text-mint disabled:opacity-50"
+                >
+                  {quoteLoading ? 'Quoting...' : 'Get Market Quote'}
+                </button>
+                <button
+                  type="button"
+                  onClick={executeMarketSwap}
+                  disabled={!quote || !isConnected}
+                  className="rounded-lg border border-cyan-300/60 bg-cyan-500/20 px-4 py-2 text-sm font-semibold text-cyan-100 disabled:opacity-50"
+                >
+                  Execute Market Swap
+                </button>
+                {canPromptSwitch ? (
+                  <button
+                    type="button"
+                    onClick={() => switchChain({ chainId })}
+                    disabled={isSwitching}
+                    className="rounded-lg border border-brass/70 bg-brass/20 px-4 py-2 text-sm font-semibold text-amber-100 disabled:opacity-50"
+                  >
+                    {isSwitching ? 'Switching...' : `Switch Wallet to ${chainId}`}
+                  </button>
+                ) : null}
+              </div>
+
+              {marketError ? <p className="text-sm text-rose-300">{marketError}</p> : null}
+              {marketStatus ? <p className="text-xs text-cyan-100">{marketStatus}</p> : null}
+              {quote ? (
+                <div className="rounded-lg border border-mint/50 bg-emerald-950/25 p-3 text-sm">
+                  <p>Expected out: {quote.expected_out} {quote.token_out}</p>
+                  <p>Minimum out: {quote.min_out} {quote.token_out}</p>
+                  <p>Route: {quote.route.join(' -&gt; ')}</p>
+                  <p>Depth: {quote.route_depth || 'n/a'}</p>
+                  <p>
+                    Fee split: {quote.total_fee_bps ?? 30} bps total / {quote.lp_fee_bps ?? 25} bps LP /{' '}
+                    {quote.protocol_fee_bps ?? 5} bps protocol
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {mode === 'limit' ? (
+            <div className="mt-3 space-y-2">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <label className="space-y-1">
+                  <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Side</span>
+                  <select
+                    value={limitSide}
+                    onChange={(event) => setLimitSide(event.target.value as 'buy' | 'sell')}
+                    className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                  >
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Limit Price</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={limitPrice}
+                    onChange={(event) => setLimitPrice(event.target.value)}
+                    className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Amount</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={limitAmount}
+                    onChange={(event) => setLimitAmount(event.target.value)}
+                    className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={queueLimitDraft}
+                className="rounded-lg border border-brass/70 bg-brass/20 px-4 py-2 text-sm font-semibold text-amber-100"
+              >
+                Queue Limit Draft
+              </button>
+              <p className="text-xs text-slate-300">
+                Drafts are local in this movement. On-chain limit order module is the next movement.
+              </p>
+            </div>
+          ) : null}
+
+          {mode === 'transfer' ? (
+            <div className="mt-3 space-y-2">
+              <label className="space-y-1">
+                <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Token</span>
+                <select
+                  value={transferToken}
+                  onChange={(event) => setTransferToken(event.target.value)}
+                  className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                >
+                  {chainTokens.map((token) => (
+                    <option key={`transfer-${token.address}-${token.symbol}`} value={token.symbol}>
+                      {token.symbol}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Recipient</span>
+                <input
+                  type="text"
+                  value={transferTo}
+                  onChange={(event) => setTransferTo(event.target.value)}
+                  placeholder="0x..."
+                  className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Amount</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={transferAmount}
+                  onChange={(event) => setTransferAmount(event.target.value)}
+                  className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={executeTransfer}
+                disabled={transferring}
+                className="rounded-lg border border-cyan-300/60 bg-cyan-500/20 px-4 py-2 text-sm font-semibold text-cyan-100 disabled:opacity-50"
+              >
+                {transferring ? 'Transferring...' : 'Transfer Token'}
+              </button>
+            </div>
+          ) : null}
+          {ticketStatus ? <p className="mt-2 text-xs text-cyan-100">{ticketStatus}</p> : null}
+        </div>
+      </section>
+
+      <div className="space-y-4">
+        <WalletPanel />
+
+        <section className="rounded-2xl border border-slateblue/70 bg-slate-950/55 p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-300">Wallet Balances</p>
+          {!isConnected ? (
+            <p className="mt-2 text-sm text-slate-300">Connect wallet to load balances.</p>
+          ) : (
+            <div className="mt-2 space-y-2">
+              {chainTokens.map((token) => (
+                <div
+                  key={`bal-${token.address}-${token.symbol}`}
+                  className="flex items-center justify-between rounded-lg border border-slateblue/50 bg-slate-900/50 px-3 py-2 text-sm"
+                >
+                  <p>{token.symbol}</p>
+                  <p className="font-mono text-xs">{shortAmount(walletBalances[token.symbol] || '0')}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-brass/45 bg-brass/10 p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-brass">Local Limit Board</p>
+          {limitOrders.length ? (
+            <div className="mt-2 max-h-48 space-y-2 overflow-y-auto">
+              {limitOrders.map((order) => (
+                <div key={order.id} className="rounded-lg border border-slateblue/55 bg-slate-900/60 p-2 text-xs text-slate-200">
+                  <p>{order.side.toUpperCase()} {order.amount} {order.token_in} @ {order.limit_price}</p>
+                  <p className="opacity-70">{new Date(order.created_at).toLocaleString()}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-slate-300">No local limit drafts yet.</p>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
