@@ -21,6 +21,44 @@ const harmonyRouterAbi = [
   }
 ] as const;
 
+const wrappedNativeAbi = [
+  {
+    inputs: [],
+    name: 'deposit',
+    outputs: [],
+    stateMutability: 'payable',
+    type: 'function'
+  }
+] as const;
+
+const mintableErc20Abi = [
+  {
+    inputs: [
+      { internalType: 'address', name: 'to', type: 'address' },
+      { internalType: 'uint256', name: 'amount', type: 'uint256' }
+    ],
+    name: 'mint',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function'
+  }
+] as const;
+
+const stabilizerAbi = [
+  {
+    inputs: [
+      { internalType: 'address', name: 'token', type: 'address' },
+      { internalType: 'uint256', name: 'collateralAmount', type: 'uint256' },
+      { internalType: 'uint256', name: 'minMusdOut', type: 'uint256' },
+      { internalType: 'address', name: 'recipient', type: 'address' }
+    ],
+    name: 'mintWithCollateral',
+    outputs: [{ internalType: 'uint256', name: 'musdOut', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+    type: 'function'
+  }
+] as const;
+
 type TokenItem = {
   symbol: string;
   name: string;
@@ -92,15 +130,15 @@ type RiskAssumptionsResponse = {
 
 const API_BASE = process.env.NEXT_PUBLIC_TEMPO_API_BASE || 'http://localhost:8500';
 const LOCAL_CHAIN_ENABLED = process.env.NEXT_PUBLIC_ENABLE_LOCAL_CHAIN === 'true';
-const ENV_DEFAULT_CHAIN_ID = Number(process.env.NEXT_PUBLIC_DEFAULT_CHAIN_ID || (LOCAL_CHAIN_ENABLED ? '31337' : '11155111'));
-const DEFAULT_CHAIN_ID = Number.isFinite(ENV_DEFAULT_CHAIN_ID) ? ENV_DEFAULT_CHAIN_ID : LOCAL_CHAIN_ENABLED ? 31337 : 11155111;
+const ENV_DEFAULT_CHAIN_ID = Number(process.env.NEXT_PUBLIC_DEFAULT_CHAIN_ID || (LOCAL_CHAIN_ENABLED ? '31337' : '97'));
+const DEFAULT_CHAIN_ID = Number.isFinite(ENV_DEFAULT_CHAIN_ID) ? ENV_DEFAULT_CHAIN_ID : LOCAL_CHAIN_ENABLED ? 31337 : 97;
 const DEFAULT_TOKENS: TokenItem[] = [
   { symbol: 'mUSD', name: 'Musical USD', address: 'local-musd', decimals: 18 },
-  { symbol: 'WETH', name: 'Wrapped Ether', address: 'local-weth', decimals: 18 }
+  { symbol: 'WBNB', name: 'Wrapped BNB', address: 'local-wbnb', decimals: 18 }
 ];
 const DEFAULT_NETWORKS_BASE: NetworkItem[] = [
-  { chain_id: 11155111, chain_key: 'ethereum-sepolia', name: 'Ethereum Sepolia', network: 'sepolia', token_count: 2 },
-  { chain_id: 97, chain_key: 'bnb-testnet', name: 'BNB Chain Testnet', network: 'bscTestnet', token_count: 2 }
+  { chain_id: 97, chain_key: 'bnb-testnet', name: 'BNB Chain Testnet', network: 'bscTestnet', token_count: 2 },
+  { chain_id: 11155111, chain_key: 'ethereum-sepolia', name: 'Ethereum Sepolia', network: 'sepolia', token_count: 2 }
 ];
 const DEFAULT_NETWORKS: NetworkItem[] = LOCAL_CHAIN_ENABLED
   ? [{ chain_id: 31337, chain_key: 'hardhat-local', name: 'Hardhat Local', network: 'hardhat', token_count: 2 }, ...DEFAULT_NETWORKS_BASE]
@@ -124,6 +162,43 @@ function shortAmount(value: string): string {
   return parsed.toFixed(6).replace(/\.?0+$/, '');
 }
 
+function toDecimal(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function clampAmountPrecision(value: string, decimals: number): string {
+  const [wholeRaw, fractionRaw = ''] = value.split('.');
+  const whole = wholeRaw || '0';
+  if (decimals <= 0) return whole;
+  const fraction = fractionRaw.slice(0, decimals);
+  return fraction.length > 0 ? `${whole}.${fraction}` : whole;
+}
+
+const DEFAULT_SWAP_GAS_BY_CHAIN: Record<number, bigint> = {
+  97: 900_000n,
+  11155111: 1_200_000n,
+  31337: 1_200_000n
+};
+
+const SWAP_GAS_SOFT_CAP = 3_000_000n;
+const SWAP_GAS_FLOOR = 250_000n;
+
+function resolveSwapGasLimit(chainId: number, estimatedGas: bigint, chainGasCap: bigint): bigint {
+  const fallback = DEFAULT_SWAP_GAS_BY_CHAIN[chainId] ?? 900_000n;
+  let gas = (estimatedGas * 120n) / 100n;
+  if (gas > SWAP_GAS_SOFT_CAP) {
+    gas = fallback;
+  }
+  if (gas > chainGasCap) {
+    gas = chainGasCap;
+  }
+  if (gas < SWAP_GAS_FLOOR) {
+    gas = SWAP_GAS_FLOOR;
+  }
+  return gas;
+}
+
 export default function HarmonyPage() {
   const [chainId, setChainId] = useState<number>(DEFAULT_CHAIN_ID);
   const [tokensByChain, setTokensByChain] = useState<Record<string, TokenItem[]>>({});
@@ -140,6 +215,13 @@ export default function HarmonyPage() {
   const [executionStatus, setExecutionStatus] = useState<string>('');
   const [executing, setExecuting] = useState(false);
   const [walletBalances, setWalletBalances] = useState<Record<string, string>>({});
+  const [nativeBalance, setNativeBalance] = useState<string>('0');
+  const [wrapAmount, setWrapAmount] = useState<string>('0.1');
+  const [testMintAmount, setTestMintAmount] = useState<string>('250');
+  const [musdMintAmount, setMusdMintAmount] = useState<string>('100');
+  const [musdMintSource, setMusdMintSource] = useState<string>('USDC');
+  const [fundingStatus, setFundingStatus] = useState<string>('');
+  const [fundingError, setFundingError] = useState<string>('');
   const [balanceRefreshNonce, setBalanceRefreshNonce] = useState(0);
 
   const { address, chainId: walletChainId, isConnected } = useAccount();
@@ -172,10 +254,36 @@ export default function HarmonyPage() {
     return map;
   }, [chainTokens]);
 
+  const wrappedNativeSymbol = useMemo(() => {
+    const wrapped = chainTokens.find((token) => {
+      const symbol = token.symbol.toUpperCase();
+      return symbol === 'WBNB' || symbol === 'WETH';
+    });
+    return wrapped?.symbol ?? (chainId === 97 ? 'WBNB' : 'WETH');
+  }, [chainId, chainTokens]);
+
+  const wrappedNativeToken = useMemo(() => {
+    return tokenBySymbolUpper.get(wrappedNativeSymbol.toUpperCase()) || null;
+  }, [tokenBySymbolUpper, wrappedNativeSymbol]);
+
   const musdSymbol = useMemo(() => {
     const musd = chainTokens.find((token) => token.symbol.toUpperCase() === 'MUSD');
     return musd?.symbol ?? 'mUSD';
   }, [chainTokens]);
+
+  useEffect(() => {
+    const current = musdMintSource.toUpperCase();
+    if (tokenBySymbolUpper.has(current)) {
+      return;
+    }
+    if (tokenBySymbolUpper.has('USDC')) {
+      setMusdMintSource('USDC');
+      return;
+    }
+    if (tokenBySymbolUpper.has('USDT')) {
+      setMusdMintSource('USDT');
+    }
+  }, [musdMintSource, tokenBySymbolUpper]);
 
   useEffect(() => {
     let active = true;
@@ -249,6 +357,7 @@ export default function HarmonyPage() {
     async function loadWalletBalances() {
       if (!address || !publicClient) {
         setWalletBalances({});
+        setNativeBalance('0');
         return;
       }
 
@@ -269,8 +378,17 @@ export default function HarmonyPage() {
         }
       }
 
+      let nextNativeBalance = '0';
+      try {
+        const rawNative = await publicClient.getBalance({ address });
+        nextNativeBalance = formatUnits(rawNative, 18);
+      } catch {
+        nextNativeBalance = '0';
+      }
+
       if (active) {
         setWalletBalances(nextBalances);
+        setNativeBalance(nextNativeBalance);
       }
     }
 
@@ -385,10 +503,26 @@ export default function HarmonyPage() {
     try {
       setExecuting(true);
       setExecutionStatus('Checking allowance...');
+      setFundingError('');
 
       const amountInBase = parseUnits(amountIn, tokenInInfo.decimals);
-      const minOutBase = parseUnits(quote.min_out, tokenOutInfo.decimals);
+      const minOutBase = parseUnits(clampAmountPrecision(quote.min_out, tokenOutInfo.decimals), tokenOutInfo.decimals);
       const router = routerAddress as Address;
+
+      const tokenInBalance = walletBalances[tokenInInfo.symbol] || '0';
+      if (toDecimal(tokenInBalance) < toDecimal(amountIn)) {
+        const isWrappedNative = tokenInInfo.symbol.toUpperCase() === wrappedNativeSymbol.toUpperCase();
+        if (isWrappedNative) {
+          setError(
+            `Insufficient ${tokenInInfo.symbol} balance. Wrap native ${
+              chainId === 97 ? 'tBNB' : 'native gas token'
+            } first, then retry swap.`
+          );
+        } else {
+          setError(`Insufficient ${tokenInInfo.symbol} balance for this swap.`);
+        }
+        return;
+      }
 
       const allowance = (await publicClient.readContract({
         address: tokenInInfo.address as Address,
@@ -411,12 +545,31 @@ export default function HarmonyPage() {
 
       setExecutionStatus('Submitting swap transaction...');
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 1_200);
+      let gasLimit = DEFAULT_SWAP_GAS_BY_CHAIN[chainId] ?? 900_000n;
+      try {
+        const [estimatedGas, block] = await Promise.all([
+          publicClient.estimateContractGas({
+            account: address,
+            address: router,
+            abi: harmonyRouterAbi,
+            functionName: 'swapExactTokensForTokens',
+            args: [amountInBase, minOutBase, path, address, deadline]
+          }),
+          publicClient.getBlock({ blockTag: 'latest' })
+        ]);
+        const chainCap = block.gasLimit > 1_000_000n ? block.gasLimit - 1_000_000n : block.gasLimit;
+        gasLimit = resolveSwapGasLimit(chainId, estimatedGas, chainCap);
+      } catch {
+        // Keep conservative chain-specific fallback to avoid node/provider overestimation.
+      }
+
       const swapHash = await walletClient.writeContract({
         account: walletClient.account,
         address: router,
         abi: harmonyRouterAbi,
         functionName: 'swapExactTokensForTokens',
-        args: [amountInBase, minOutBase, path, address, deadline]
+        args: [amountInBase, minOutBase, path, address, deadline],
+        gas: gasLimit
       });
 
       setExecutionStatus(`Swap tx sent: ${swapHash}`);
@@ -425,9 +578,209 @@ export default function HarmonyPage() {
       setExecutionStatus(`Swap confirmed: ${swapHash}`);
       setBalanceRefreshNonce((value) => value + 1);
     } catch (swapError) {
-      setError(swapError instanceof Error ? swapError.message : 'Swap transaction failed');
+      const message = swapError instanceof Error ? swapError.message : 'Swap transaction failed';
+      if (message.toLowerCase().includes('gas limit too high')) {
+        setError(
+          'Swap gas estimate exceeded chain cap. Reduced gas limit is now enforced; request quote again and retry.'
+        );
+      } else {
+        setError(message);
+      }
     } finally {
       setExecuting(false);
+    }
+  }
+
+  async function wrapNativeToWrapped() {
+    setFundingError('');
+    setFundingStatus('');
+
+    if (!isConnected || !address) {
+      setFundingError('Connect wallet first.');
+      return;
+    }
+    if (walletChainId !== chainId) {
+      setFundingError(`Wallet network mismatch. Switch wallet to chain ${chainId}.`);
+      return;
+    }
+    if (!publicClient || !walletClient) {
+      setFundingError('Wallet client is not ready.');
+      return;
+    }
+    if (!wrappedNativeToken || !isAddress(wrappedNativeToken.address)) {
+      setFundingError(`Wrapped native token (${wrappedNativeSymbol}) is not configured on this chain.`);
+      return;
+    }
+    if (!wrapAmount || Number(wrapAmount) <= 0) {
+      setFundingError('Wrap amount must be greater than zero.');
+      return;
+    }
+    if (toDecimal(nativeBalance) < toDecimal(wrapAmount)) {
+      setFundingError(`Insufficient native balance. Available: ${shortAmount(nativeBalance)}.`);
+      return;
+    }
+
+    try {
+      const value = parseUnits(wrapAmount, 18);
+      setFundingStatus(`Wrapping ${wrapAmount} ${chainId === 97 ? 'tBNB' : 'native'} to ${wrappedNativeSymbol}...`);
+      const txHash = await walletClient.writeContract({
+        account: walletClient.account,
+        address: wrappedNativeToken.address as Address,
+        abi: wrappedNativeAbi,
+        functionName: 'deposit',
+        args: [],
+        value,
+        gas: 180_000n
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      setFundingStatus(`Wrap confirmed: ${txHash}`);
+      setBalanceRefreshNonce((valueNonce) => valueNonce + 1);
+      if (tokenIn.toUpperCase() !== wrappedNativeSymbol.toUpperCase()) {
+        setTokenIn(wrappedNativeSymbol);
+      }
+    } catch (wrapError) {
+      setFundingError(wrapError instanceof Error ? wrapError.message : 'wrap transaction failed');
+    }
+  }
+
+  async function mintTestToken(symbol: 'USDC' | 'USDT') {
+    setFundingError('');
+    setFundingStatus('');
+
+    if (!isConnected || !address) {
+      setFundingError('Connect wallet first.');
+      return;
+    }
+    if (walletChainId !== chainId) {
+      setFundingError(`Wallet network mismatch. Switch wallet to chain ${chainId}.`);
+      return;
+    }
+    if (!publicClient || !walletClient) {
+      setFundingError('Wallet client is not ready.');
+      return;
+    }
+
+    const token = tokenBySymbolUpper.get(symbol);
+    if (!token || !isAddress(token.address)) {
+      setFundingError(`${symbol} is not available as an EVM token on this chain.`);
+      return;
+    }
+    if (!testMintAmount || Number(testMintAmount) <= 0) {
+      setFundingError('Test mint amount must be greater than zero.');
+      return;
+    }
+
+    try {
+      const amountRaw = parseUnits(testMintAmount, token.decimals);
+      setFundingStatus(`Minting ${testMintAmount} ${symbol} to your wallet...`);
+      const txHash = await walletClient.writeContract({
+        account: walletClient.account,
+        address: token.address as Address,
+        abi: mintableErc20Abi,
+        functionName: 'mint',
+        args: [address, amountRaw],
+        gas: 350_000n
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      setFundingStatus(`Mint confirmed: ${txHash}`);
+      setBalanceRefreshNonce((valueNonce) => valueNonce + 1);
+      setTokenIn(symbol);
+      setTokenOut(musdSymbol);
+      setAmountIn(testMintAmount);
+      setQuote(null);
+    } catch (mintError) {
+      setFundingError(
+        mintError instanceof Error
+          ? `${symbol} mint failed (token may be non-mintable on this network): ${mintError.message}`
+          : `${symbol} mint failed`
+      );
+    }
+  }
+
+  async function mintMusdWithCollateral() {
+    setFundingError('');
+    setFundingStatus('');
+
+    if (!isConnected || !address) {
+      setFundingError('Connect wallet first.');
+      return;
+    }
+    if (walletChainId !== chainId) {
+      setFundingError(`Wallet network mismatch. Switch wallet to chain ${chainId}.`);
+      return;
+    }
+    if (!publicClient || !walletClient) {
+      setFundingError('Wallet client is not ready.');
+      return;
+    }
+    if (!selectedNetwork?.stabilizer_address || !isAddress(selectedNetwork.stabilizer_address)) {
+      setFundingError('Stabilizer contract is not configured for this chain.');
+      return;
+    }
+    if (!musdMintAmount || Number(musdMintAmount) <= 0) {
+      setFundingError('mUSD mint amount must be greater than zero.');
+      return;
+    }
+
+    const collateralSymbol = musdMintSource.toUpperCase();
+    const collateralToken = tokenBySymbolUpper.get(collateralSymbol);
+    if (!collateralToken || !isAddress(collateralToken.address)) {
+      setFundingError(`${collateralSymbol} collateral token is not configured for this chain.`);
+      return;
+    }
+
+    const currentCollateralBalance = walletBalances[collateralToken.symbol] || '0';
+    if (toDecimal(currentCollateralBalance) < toDecimal(musdMintAmount)) {
+      setFundingError(
+        `Insufficient ${collateralToken.symbol} balance for mint. Mint test ${collateralToken.symbol} first or reduce amount.`
+      );
+      return;
+    }
+
+    try {
+      const amountRaw = parseUnits(musdMintAmount, collateralToken.decimals);
+      const stabilizer = selectedNetwork.stabilizer_address as Address;
+
+      setFundingStatus(`Checking ${collateralToken.symbol} allowance for Stabilizer...`);
+      const allowance = (await publicClient.readContract({
+        address: collateralToken.address as Address,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [address, stabilizer]
+      })) as bigint;
+
+      if (allowance < amountRaw) {
+        setFundingStatus(`Approving ${collateralToken.symbol} to Stabilizer...`);
+        const approveHash = await walletClient.writeContract({
+          account: walletClient.account,
+          address: collateralToken.address as Address,
+          abi: erc20Abi,
+          functionName: 'approve',
+          args: [stabilizer, maxUint256]
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      }
+
+      setFundingStatus(`Minting mUSD with ${musdMintAmount} ${collateralToken.symbol} collateral...`);
+      const txHash = await walletClient.writeContract({
+        account: walletClient.account,
+        address: stabilizer,
+        abi: stabilizerAbi,
+        functionName: 'mintWithCollateral',
+        args: [collateralToken.address as Address, amountRaw, 0n, address],
+        gas: 1_100_000n
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      setFundingStatus(`mUSD mint confirmed: ${txHash}`);
+      setBalanceRefreshNonce((valueNonce) => valueNonce + 1);
+      setTokenIn(collateralToken.symbol);
+      setTokenOut(musdSymbol);
+      setAmountIn(musdMintAmount);
+      setQuote(null);
+    } catch (mintError) {
+      setFundingError(
+        mintError instanceof Error ? `mUSD mint failed: ${mintError.message}` : 'mUSD mint failed'
+      );
     }
   }
 
@@ -616,6 +969,12 @@ export default function HarmonyPage() {
 
         <section className="rounded-2xl border border-slateblue/70 bg-slate-950/55 p-4 text-sm">
           <p className="text-xs uppercase tracking-[0.2em] text-slate-300">Wallet Token Balances</p>
+          <div className="mt-2 rounded-lg border border-slateblue/50 bg-slate-900/50 px-3 py-2">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-slate-300">
+              Native {chainId === 97 ? 'tBNB' : 'Gas Token'}
+            </p>
+            <p className="font-mono text-sm text-slate-100">{shortAmount(nativeBalance)}</p>
+          </div>
           {!isConnected ? (
             <p className="mt-2 text-slate-300">Connect wallet to load balances.</p>
           ) : balanceRows.length === 0 ? (
@@ -653,6 +1012,128 @@ export default function HarmonyPage() {
               </div>
             </div>
           ) : null}
+
+          <div className="mt-3 rounded-lg border border-cyan-300/40 bg-cyan-500/10 p-3">
+            <p className="text-xs uppercase tracking-[0.14em] text-cyan-100">Fund Wallet With Native Token</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={wrapAmount}
+                onChange={(event) => setWrapAmount(event.target.value)}
+                className="w-28 rounded-lg border border-slateblue/70 bg-slate-950/80 px-2 py-1 text-xs"
+              />
+              <button
+                type="button"
+                onClick={wrapNativeToWrapped}
+                className="rounded-lg border border-cyan-300/60 bg-cyan-500/20 px-2.5 py-1.5 text-xs font-semibold text-cyan-100"
+              >
+                Wrap to {wrappedNativeSymbol}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTokenIn(wrappedNativeSymbol);
+                  setTokenOut(musdSymbol);
+                  setAmountIn(wrapAmount || '0.1');
+                  setQuote(null);
+                }}
+                className="rounded-lg border border-brass/60 bg-brass/20 px-2.5 py-1.5 text-xs font-semibold text-amber-100"
+              >
+                Prepare {wrappedNativeSymbol} {'->'} {musdSymbol}
+              </button>
+              {tokenBySymbolUpper.has('USDC') ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTokenIn(wrappedNativeSymbol);
+                    setTokenOut(tokenBySymbolUpper.get('USDC')?.symbol || 'USDC');
+                    setAmountIn(wrapAmount || '0.1');
+                    setQuote(null);
+                  }}
+                  className="rounded-lg border border-cyan-300/60 bg-cyan-500/20 px-2.5 py-1.5 text-xs font-semibold text-cyan-100"
+                >
+                  Prepare {wrappedNativeSymbol} {'->'} USDC
+                </button>
+              ) : null}
+              {tokenBySymbolUpper.has('USDT') ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTokenIn(wrappedNativeSymbol);
+                    setTokenOut(tokenBySymbolUpper.get('USDT')?.symbol || 'USDT');
+                    setAmountIn(wrapAmount || '0.1');
+                    setQuote(null);
+                  }}
+                  className="rounded-lg border border-emerald-300/60 bg-emerald-500/20 px-2.5 py-1.5 text-xs font-semibold text-emerald-100"
+                >
+                  Prepare {wrappedNativeSymbol} {'->'} USDT
+                </button>
+              ) : null}
+            </div>
+            <div className="mt-3 border-t border-cyan-200/20 pt-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-cyan-100">Testnet Collateral + mUSD Mint</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={testMintAmount}
+                  onChange={(event) => setTestMintAmount(event.target.value)}
+                  className="w-24 rounded-lg border border-slateblue/70 bg-slate-950/80 px-2 py-1 text-xs"
+                />
+                {tokenBySymbolUpper.has('USDC') ? (
+                  <button
+                    type="button"
+                    onClick={() => mintTestToken('USDC')}
+                    className="rounded-lg border border-cyan-300/60 bg-cyan-500/20 px-2.5 py-1.5 text-xs font-semibold text-cyan-100"
+                  >
+                    Mint USDC (test)
+                  </button>
+                ) : null}
+                {tokenBySymbolUpper.has('USDT') ? (
+                  <button
+                    type="button"
+                    onClick={() => mintTestToken('USDT')}
+                    className="rounded-lg border border-emerald-300/60 bg-emerald-500/20 px-2.5 py-1.5 text-xs font-semibold text-emerald-100"
+                  >
+                    Mint USDT (test)
+                  </button>
+                ) : null}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={musdMintAmount}
+                  onChange={(event) => setMusdMintAmount(event.target.value)}
+                  className="w-24 rounded-lg border border-slateblue/70 bg-slate-950/80 px-2 py-1 text-xs"
+                />
+                <select
+                  value={musdMintSource}
+                  onChange={(event) => setMusdMintSource(event.target.value)}
+                  className="rounded-lg border border-slateblue/70 bg-slate-950/80 px-2 py-1 text-xs"
+                >
+                  {tokenBySymbolUpper.has('USDC') ? <option value="USDC">USDC</option> : null}
+                  {tokenBySymbolUpper.has('USDT') ? <option value="USDT">USDT</option> : null}
+                </select>
+                <button
+                  type="button"
+                  onClick={mintMusdWithCollateral}
+                  className="rounded-lg border border-brass/60 bg-brass/20 px-2.5 py-1.5 text-xs font-semibold text-amber-100"
+                >
+                  Mint mUSD (Stabilizer)
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-300">
+                Testnet flow: mint collateral to your wallet, then mint mUSD via Stabilizer with wallet-signed txs.
+              </p>
+            </div>
+            {fundingError ? <p className="mt-2 text-xs text-rose-300">{fundingError}</p> : null}
+            {fundingStatus ? <p className="mt-2 text-xs text-cyan-100">{fundingStatus}</p> : null}
+          </div>
         </section>
 
         <section className="rounded-2xl border border-amber-400/35 bg-amber-500/10 p-4 text-sm text-amber-100">

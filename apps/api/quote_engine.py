@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 
 from .chain_registry import load_chain_registry
 
@@ -29,6 +29,7 @@ class ChainLiquidityState:
     chain_id: int
     symbols: set[str]
     canonical_symbols: dict[str, str]
+    token_decimals: dict[str, int]
     pairs: list[PairState]
     swap_fee_bps: int
     protocol_fee_bps: int
@@ -63,6 +64,7 @@ class LiquidityDepthCache:
             tokens = chain.get('tokens', [])
             canonical: dict[str, str] = {}
             symbols: set[str] = set()
+            token_decimals: dict[str, int] = {}
             if isinstance(tokens, list):
                 for token in tokens:
                     if not isinstance(token, dict):
@@ -73,6 +75,15 @@ class LiquidityDepthCache:
                     upper = symbol.upper()
                     symbols.add(upper)
                     canonical[upper] = symbol
+                    try:
+                        decimals = int(token.get('decimals', 18))
+                    except Exception:
+                        decimals = 18
+                    if decimals < 0:
+                        decimals = 0
+                    if decimals > 36:
+                        decimals = 36
+                    token_decimals[upper] = decimals
 
             swap_fee_bps = 30
             protocol_fee_bps = 5
@@ -126,6 +137,7 @@ class LiquidityDepthCache:
                 chain_id=chain_id,
                 symbols=symbols,
                 canonical_symbols=canonical,
+                token_decimals=token_decimals,
                 pairs=parsed_pairs,
                 swap_fee_bps=swap_fee_bps,
                 protocol_fee_bps=protocol_fee_bps
@@ -194,6 +206,18 @@ def _legacy_amount(token_in: str, token_out: str, amount_in: Decimal) -> Decimal
         else:
             rate = Decimal('0.06')
     return amount_in * rate
+
+
+def _format_amount_for_decimals(value: Decimal, decimals: int) -> str:
+    if decimals <= 0:
+        quantized = value.quantize(Decimal('1'), rounding=ROUND_DOWN)
+    else:
+        quantized = value.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_DOWN)
+
+    text = format(quantized, 'f')
+    if '.' in text:
+        text = text.rstrip('0').rstrip('.')
+    return text or '0'
 
 
 def build_quote(
@@ -287,14 +311,16 @@ def build_quote(
     min_out = expected_out * (Decimal(10_000 - slippage_bps) / Decimal(10_000))
     protocol_fee_amount_in = amount_in * Decimal(state.protocol_fee_bps) / Decimal(10_000)
     lp_fee_bps = max(0, state.swap_fee_bps - state.protocol_fee_bps)
+    token_in_decimals = state.token_decimals.get(token_in_upper, 18)
+    token_out_decimals = state.token_decimals.get(token_out_upper, 18)
 
     return {
         'chain_id': chain_id,
         'token_in': canonical_in,
         'token_out': canonical_out,
-        'amount_in': str(amount_in),
-        'expected_out': str(expected_out),
-        'min_out': str(min_out),
+        'amount_in': _format_amount_for_decimals(amount_in, token_in_decimals),
+        'expected_out': _format_amount_for_decimals(expected_out, token_out_decimals),
+        'min_out': _format_amount_for_decimals(min_out, token_out_decimals),
         'slippage_bps': slippage_bps,
         'route': route,
         'route_depth': str(route_depth),
@@ -302,6 +328,6 @@ def build_quote(
         'total_fee_bps': state.swap_fee_bps,
         'protocol_fee_bps': state.protocol_fee_bps,
         'lp_fee_bps': lp_fee_bps,
-        'protocol_fee_amount_in': str(protocol_fee_amount_in),
+        'protocol_fee_amount_in': _format_amount_for_decimals(protocol_fee_amount_in, token_in_decimals),
         'engine': 'harmony-engine-v2'
     }

@@ -4,6 +4,12 @@ from decimal import Decimal
 from apps.api.quote_engine import QuoteEngineError, build_quote
 
 
+def _fraction_length(value: str) -> int:
+    if '.' not in value:
+        return 0
+    return len(value.split('.', 1)[1])
+
+
 class QuoteEndpointTests(unittest.TestCase):
     def test_returns_direct_musd_route(self) -> None:
         result = build_quote(
@@ -72,3 +78,16 @@ class QuoteEndpointTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.status_code, 422)
         self.assertIn('bootstrap pool liquidity', str(ctx.exception))
+
+    def test_quote_amount_precision_is_capped_to_token_decimals(self) -> None:
+        result = build_quote(
+            chain_id=31337,
+            token_in='mUSD',
+            token_out='WETH',
+            amount_in=Decimal('1000'),
+            slippage_bps=50
+        )
+
+        self.assertLessEqual(_fraction_length(result['expected_out']), 18)
+        self.assertLessEqual(_fraction_length(result['min_out']), 18)
+        self.assertLessEqual(_fraction_length(result['amount_in']), 18)

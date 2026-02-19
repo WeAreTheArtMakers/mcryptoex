@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Address, erc20Abi, formatUnits, isAddress, maxUint256, parseUnits } from 'viem';
 import { useAccount, usePublicClient, useSwitchChain, useWalletClient } from 'wagmi';
 import { WalletPanel } from '../../components/wallet-panel';
@@ -101,6 +101,12 @@ type ChartPoint = {
   fees: number;
 };
 
+type PairChartPoint = {
+  label: string;
+  volume: number;
+  fees: number;
+};
+
 type LimitOrderDraft = {
   id: string;
   chain_id: number;
@@ -140,6 +146,38 @@ function extractDetail(status: number, payload: unknown): string {
   return `request failed: ${status}`;
 }
 
+function clampAmountPrecision(value: string, decimals: number): string {
+  const [wholeRaw, fractionRaw = ''] = value.split('.');
+  const whole = wholeRaw || '0';
+  if (decimals <= 0) return whole;
+  const fraction = fractionRaw.slice(0, decimals);
+  return fraction.length > 0 ? `${whole}.${fraction}` : whole;
+}
+
+const DEFAULT_SWAP_GAS_BY_CHAIN: Record<number, bigint> = {
+  97: 900_000n,
+  11155111: 1_200_000n,
+  31337: 1_200_000n
+};
+
+const SWAP_GAS_SOFT_CAP = 3_000_000n;
+const SWAP_GAS_FLOOR = 250_000n;
+
+function resolveSwapGasLimit(chainId: number, estimatedGas: bigint, chainGasCap: bigint): bigint {
+  const fallback = DEFAULT_SWAP_GAS_BY_CHAIN[chainId] ?? 900_000n;
+  let gas = (estimatedGas * 120n) / 100n;
+  if (gas > SWAP_GAS_SOFT_CAP) {
+    gas = fallback;
+  }
+  if (gas > chainGasCap) {
+    gas = chainGasCap;
+  }
+  if (gas < SWAP_GAS_FLOOR) {
+    gas = SWAP_GAS_FLOOR;
+  }
+  return gas;
+}
+
 export default function ExchangePage() {
   const [mode, setMode] = useState<'market' | 'limit' | 'transfer'>('market');
   const [chainId, setChainId] = useState<number>(DEFAULT_CHAIN_ID);
@@ -170,6 +208,7 @@ export default function ExchangePage() {
   const [pairs, setPairs] = useState<PairRow[]>([]);
   const [pairsError, setPairsError] = useState<string>('');
   const [walletBalances, setWalletBalances] = useState<Record<string, string>>({});
+  const [nativeBalance, setNativeBalance] = useState<string>('0');
   const [balanceNonce, setBalanceNonce] = useState(0);
 
   const { address, chainId: walletChainId, isConnected } = useAccount();
@@ -187,6 +226,10 @@ export default function ExchangePage() {
     () => networks.find((network) => network.chain_id === chainId),
     [networks, chainId]
   );
+  const hasAnyErc20Balance = useMemo(
+    () => chainTokens.some((token) => n(walletBalances[token.symbol] || '0') > 0),
+    [chainTokens, walletBalances]
+  );
   const limitStorageKey = `mcryptoex.limit-orders.v1.${chainId}`;
   const latestPoint = analytics.length ? analytics[analytics.length - 1] : null;
   const pairSummary = useMemo(() => {
@@ -201,6 +244,13 @@ export default function ExchangePage() {
       pools: filtered
     };
   }, [pairs, chainId]);
+  const pairChartData = useMemo<PairChartPoint[]>(() => {
+    return pairSummary.pools.slice(0, 10).map((pair) => ({
+      label: `${pair.token0_symbol}/${pair.token1_symbol}`,
+      volume: n(pair.total_amount_in) > 0 ? n(pair.total_amount_in) : n(pair.reserve0_decimal) + n(pair.reserve1_decimal),
+      fees: n(pair.total_fee_usd)
+    }));
+  }, [pairSummary.pools]);
 
   useEffect(() => {
     let active = true;
@@ -316,6 +366,7 @@ export default function ExchangePage() {
     async function loadBalances() {
       if (!address || !publicClient) {
         setWalletBalances({});
+        setNativeBalance('0');
         return;
       }
       const next: Record<string, string> = {};
@@ -332,6 +383,12 @@ export default function ExchangePage() {
         } catch {
           next[token.symbol] = '0';
         }
+      }
+      try {
+        const rawNative = await publicClient.getBalance({ address });
+        setNativeBalance(formatUnits(rawNative, 18));
+      } catch {
+        setNativeBalance('0');
       }
       if (active) setWalletBalances(next);
     }
@@ -444,7 +501,16 @@ export default function ExchangePage() {
 
     try {
       const amountInBase = parseUnits(amountIn, tokenInInfo.decimals);
-      const minOutBase = parseUnits(quote.min_out, tokenOutInfo.decimals);
+      const minOutBase = parseUnits(clampAmountPrecision(quote.min_out, tokenOutInfo.decimals), tokenOutInfo.decimals);
+      const tokenInBalance = walletBalances[tokenInInfo.symbol] || '0';
+      if (n(tokenInBalance) < n(amountIn)) {
+        setMarketError(
+          `Insufficient ${tokenInInfo.symbol} balance. If you hold only native ${
+            chainId === 97 ? 'tBNB' : 'gas token'
+          }, wrap it first.`
+        );
+        return;
+      }
 
       setMarketStatus('Checking allowance...');
       const allowance = (await publicClient.readContract({
@@ -468,19 +534,43 @@ export default function ExchangePage() {
 
       setMarketStatus('Submitting swap transaction...');
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 1_200);
+      let gasLimit = DEFAULT_SWAP_GAS_BY_CHAIN[chainId] ?? 900_000n;
+      try {
+        const [estimatedGas, block] = await Promise.all([
+          publicClient.estimateContractGas({
+            account: address,
+            address: router,
+            abi: harmonyRouterAbi,
+            functionName: 'swapExactTokensForTokens',
+            args: [amountInBase, minOutBase, path, address, deadline]
+          }),
+          publicClient.getBlock({ blockTag: 'latest' })
+        ]);
+        const chainCap = block.gasLimit > 1_000_000n ? block.gasLimit - 1_000_000n : block.gasLimit;
+        gasLimit = resolveSwapGasLimit(chainId, estimatedGas, chainCap);
+      } catch {
+        // Keep conservative chain-specific fallback to avoid provider overestimation.
+      }
+
       const swapHash = await walletClient.writeContract({
         account: walletClient.account,
         address: router,
         abi: harmonyRouterAbi,
         functionName: 'swapExactTokensForTokens',
-        args: [amountInBase, minOutBase, path, address, deadline]
+        args: [amountInBase, minOutBase, path, address, deadline],
+        gas: gasLimit
       });
       setMarketStatus(`Swap tx sent: ${swapHash}`);
       await publicClient.waitForTransactionReceipt({ hash: swapHash });
       setMarketStatus(`Swap confirmed: ${swapHash}`);
       setBalanceNonce((value) => value + 1);
     } catch (error) {
-      setMarketError(error instanceof Error ? error.message : 'Swap failed');
+      const message = error instanceof Error ? error.message : 'Swap failed';
+      if (message.toLowerCase().includes('gas limit too high')) {
+        setMarketError('Swap gas estimate exceeded chain cap. Request a fresh quote and retry.');
+      } else {
+        setMarketError(message);
+      }
     }
   }
 
@@ -619,6 +709,21 @@ export default function ExchangePage() {
                 <Area yAxisId="left" type="monotone" dataKey="volume" stroke="#34d399" fill="url(#chartVolumeFill)" strokeWidth={2} />
                 <Area yAxisId="right" type="monotone" dataKey="fees" stroke="#f59e0b" fill="url(#chartFeesFill)" strokeWidth={2} />
               </AreaChart>
+            </ResponsiveContainer>
+          ) : pairChartData.length ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={pairChartData} margin={{ top: 8, right: 8, left: 0, bottom: 28 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />
+                <XAxis dataKey="label" stroke="#cbd5e1" angle={-16} textAnchor="end" height={44} tick={{ fontSize: 10 }} />
+                <YAxis yAxisId="left" stroke="#34d399" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{ fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                  formatter={(value, name) => [n(value).toFixed(6), String(name)]}
+                />
+                <Bar yAxisId="left" dataKey="volume" fill="#34d399" radius={[6, 6, 0, 0]} />
+                <Bar yAxisId="right" dataKey="fees" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
           ) : (
             <div className="flex h-full flex-col items-center justify-center text-sm text-slate-300">
@@ -876,6 +981,12 @@ export default function ExchangePage() {
 
         <section className="rounded-2xl border border-slateblue/70 bg-slate-950/55 p-4">
           <p className="text-xs uppercase tracking-[0.2em] text-slate-300">Wallet Balances</p>
+          <div className="mt-2 rounded-lg border border-slateblue/50 bg-slate-900/50 px-3 py-2 text-sm">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-slate-300">
+              Native {chainId === 97 ? 'tBNB' : 'Gas Token'}
+            </p>
+            <p className="font-mono text-xs">{shortAmount(nativeBalance)}</p>
+          </div>
           {!isConnected ? (
             <p className="mt-2 text-sm text-slate-300">Connect wallet to load balances.</p>
           ) : (
@@ -891,6 +1002,12 @@ export default function ExchangePage() {
               ))}
             </div>
           )}
+          {isConnected && !hasAnyErc20Balance ? (
+            <div className="mt-2 rounded-lg border border-cyan-300/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+              ERC20 balances are empty. Use <a href="/harmony" className="underline">Harmony funding tools</a> to wrap
+              native {chainId === 97 ? 'tBNB' : 'gas token'}, mint test collateral, and mint mUSD.
+            </div>
+          ) : null}
         </section>
 
         <section className="rounded-2xl border border-brass/45 bg-brass/10 p-4">
