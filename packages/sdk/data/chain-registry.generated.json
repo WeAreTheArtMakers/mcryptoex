@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "generated_at": "2026-02-19T07:33:29.992029+00:00",
+  "generated_at": "2026-02-19T12:59:27.279879+00:00",
   "source": "packages/contracts/deploy/address-registry.*.json + live-rpc-pair-discovery",
   "chains": [
     {
@@ -37,7 +37,7 @@
       "network_health": {
         "rpc_connected": false,
         "latest_block": null,
-        "checked_at": "2026-02-19T07:33:29.992029+00:00",
+        "checked_at": "2026-02-19T12:59:27.279879+00:00",
         "discovery_status": "error: rpc call failed via urllib and curl: HTTP Error 502: Bad Gateway; curl=curl: (6) Could not resolve host: host.docker.internal"
       },
       "tokens": [
@@ -85,7 +85,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -95,7 +95,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -105,7 +105,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -142,8 +142,8 @@
       "pairs": [],
       "network_health": {
         "rpc_connected": true,
-        "latest_block": 10291251,
-        "checked_at": "2026-02-19T07:33:29.992029+00:00",
+        "latest_block": 10292782,
+        "checked_at": "2026-02-19T12:59:27.279879+00:00",
         "discovery_status": "factory-not-configured"
       },
       "tokens": [
@@ -184,7 +184,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -194,7 +194,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -204,7 +204,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -224,68 +224,68 @@
         "protocol_fee_bps": 5
       },
       "contracts": {
-        "musd": "0x63a3530a1CB7Cc64F1D40a32C7d08D82226e9163",
-        "stabilizer": "0xa8Ed74cf4aBfF6c7015114228504474B7602e311",
-        "oracle": "0xe0Dd3f2016bE1e77c53699C0486a7f0e3ccbe61a",
-        "harmony_factory": "0x4Cf971c2FfC33B0eFCe9C499303Fca8Fb3bd6EA4",
-        "harmony_router": "0xc0654b6c9b81eF7d03743B8Cc5A81D3292F9a3C1",
-        "resonance_vault": "0x9FA1ceBD87bd9B3a747328964900F8007177fAF2"
+        "musd": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
+        "stabilizer": "0x35cb76D1673C1b18bD753FE54e4246d52F61FeF1",
+        "oracle": "0x7FC73C519C6D3067398A76CdcA123a0778361be7",
+        "harmony_factory": "0x0FC747cb80Fe999e70393E187ad947F8E3b4b4b6",
+        "harmony_router": "0xb29E5Fabf83ae8503F0276F7C57559f17428bF93",
+        "resonance_vault": "0x3AB2112a675de1CDED56B02393A99054E9B1C222"
       },
       "indexer": {
         "pair_addresses": [
-          "0xd1d8ffc3456e4239f26e66210afc87cbb1ec2a80",
-          "0xbf14d836623806643627ff6a88433fc504bd23c2"
+          "0x1e416713b1d40c4d38b643ff9ca6c52f55be1c20",
+          "0x6c5c0e49005d9b49a15f8306511d0b01fad97897"
         ],
         "stabilizer_addresses": [
-          "0xa8Ed74cf4aBfF6c7015114228504474B7602e311"
+          "0x35cb76D1673C1b18bD753FE54e4246d52F61FeF1"
         ],
         "vault_addresses": [
-          "0x9FA1ceBD87bd9B3a747328964900F8007177fAF2"
+          "0x3AB2112a675de1CDED56B02393A99054E9B1C222"
         ],
         "start_block": "latest",
         "confirmation_depth": 3
       },
       "pairs": [
         {
-          "pair_address": "0xd1d8ffc3456e4239f26e66210afc87cbb1ec2a80",
-          "token0_address": "0x63a3530a1cb7cc64f1d40a32c7d08d82226e9163",
+          "pair_address": "0x1e416713b1d40c4d38b643ff9ca6c52f55be1c20",
+          "token0_address": "0x5d05b53bb0862c6d11b8c2f6b3465b3ffc9a8733",
+          "token1_address": "0x66e972502a34a625828c544a1914e8d8cc2a9de5",
+          "token0_symbol": "mUSD",
+          "token1_symbol": "USDT",
+          "reserve0_raw": "40000000000000000000",
+          "reserve1_raw": "40000000000000000000",
+          "reserve0_decimal": "40",
+          "reserve1_decimal": "40",
+          "reserve_block_timestamp": 1771505813,
+          "checked_at": "2026-02-19T12:59:27.279879+00:00"
+        },
+        {
+          "pair_address": "0x6c5c0e49005d9b49a15f8306511d0b01fad97897",
+          "token0_address": "0x5d05b53bb0862c6d11b8c2f6b3465b3ffc9a8733",
           "token1_address": "0xae13d989dac2f0debff460ac112a837c89baa7cd",
           "token0_symbol": "mUSD",
           "token1_symbol": "WBNB",
-          "reserve0_raw": "30000000000000000000",
-          "reserve1_raw": "50000000000000000",
-          "reserve0_decimal": "30",
-          "reserve1_decimal": "0.05",
-          "reserve_block_timestamp": 1771485907,
-          "checked_at": "2026-02-19T07:33:29.992029+00:00"
-        },
-        {
-          "pair_address": "0xbf14d836623806643627ff6a88433fc504bd23c2",
-          "token0_address": "0x63a3530a1cb7cc64f1d40a32c7d08d82226e9163",
-          "token1_address": "0x64544969ed7ebf5f083679233325356ebe738930",
-          "token0_symbol": "mUSD",
-          "token1_symbol": "USDC",
-          "reserve0_raw": "2000000000000000000",
-          "reserve1_raw": "2000000000000000000",
-          "reserve0_decimal": "2",
-          "reserve1_decimal": "2",
-          "reserve_block_timestamp": 1771486402,
-          "checked_at": "2026-02-19T07:33:29.992029+00:00"
+          "reserve0_raw": "40000000000000000000",
+          "reserve1_raw": "500000000000000000",
+          "reserve0_decimal": "40",
+          "reserve1_decimal": "0.5",
+          "reserve_block_timestamp": 1771505820,
+          "checked_at": "2026-02-19T12:59:27.279879+00:00"
         }
       ],
       "network_health": {
         "rpc_connected": true,
-        "latest_block": 91226610,
-        "checked_at": "2026-02-19T07:33:29.992029+00:00",
+        "latest_block": 91270029,
+        "checked_at": "2026-02-19T12:59:27.279879+00:00",
         "discovery_status": "ok",
         "discovered_pairs": 2,
-        "factory_address": "0x4Cf971c2FfC33B0eFCe9C499303Fca8Fb3bd6EA4"
+        "factory_address": "0x0FC747cb80Fe999e70393E187ad947F8E3b4b4b6"
       },
       "tokens": [
         {
           "symbol": "mUSD",
           "name": "Musical USD",
-          "address": "0x63a3530a1CB7Cc64F1D40a32C7d08D82226e9163",
+          "address": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
           "decimals": 18,
           "source": "contracts.musd"
         },
@@ -340,7 +340,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -350,7 +350,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -360,7 +360,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T07:33:29.992029+00:00",
+          "last_checked_at": "2026-02-19T12:59:27.279879+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
