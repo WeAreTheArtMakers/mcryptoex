@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAccount } from 'wagmi';
 import {
   DEFAULT_CHAIN_ID,
@@ -34,6 +34,7 @@ type PersistedLayout = {
   accountTab: AccountTab;
   favorites: string[];
   selectedPairByChain: Record<string, string>;
+  selectedPairSymbolByChain?: Record<string, string>;
 };
 
 const LAYOUT_STORAGE_KEY = 'mcryptoex.pro.layout.v3';
@@ -92,6 +93,12 @@ const DESK_TITLES: Record<Exclude<DeskTab, 'trade'>, { title: string; subtitle: 
 function shortAddress(value?: string) {
   if (!value) return '0x...';
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function normalizeSavedPairId(value: string): string {
+  const [chain, pool] = String(value || '').split(':');
+  if (!chain || !pool) return value;
+  return `${chain}:${pool.toLowerCase()}`;
 }
 
 function formatChange(value: number | null): string {
@@ -308,6 +315,7 @@ export function ProTerminal() {
   const [strictMode, setStrictMode] = useState(true);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [selectedPairByChain, setSelectedPairByChain] = useState<Record<string, string>>({});
+  const [selectedPairSymbolByChain, setSelectedPairSymbolByChain] = useState<Record<string, string>>({});
   const [ready, setReady] = useState(false);
   const [sizePct, setSizePct] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -315,8 +323,10 @@ export function ProTerminal() {
   const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [uiNotice, setUiNotice] = useState('');
+  const [walletMenuOpen, setWalletMenuOpen] = useState(false);
 
   const { address } = useAccount();
+  const walletMenuRef = useRef<HTMLDivElement | null>(null);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const activeDesk = useMemo<DeskTab>(() => {
@@ -357,14 +367,26 @@ export function ProTerminal() {
           setAccountTab(parsed.accountTab);
         }
         if (Array.isArray(parsed.favorites)) {
-          setFavorites(parsed.favorites.filter((item): item is string => typeof item === 'string').slice(0, 250));
+          setFavorites(
+            parsed.favorites
+              .filter((item): item is string => typeof item === 'string')
+              .map((item) => normalizeSavedPairId(item))
+              .slice(0, 250)
+          );
         }
         if (parsed.selectedPairByChain && typeof parsed.selectedPairByChain === 'object') {
           const next: Record<string, string> = {};
           for (const [key, value] of Object.entries(parsed.selectedPairByChain)) {
-            if (typeof value === 'string') next[key] = value;
+            if (typeof value === 'string') next[key] = normalizeSavedPairId(value);
           }
           setSelectedPairByChain(next);
+        }
+        if (parsed.selectedPairSymbolByChain && typeof parsed.selectedPairSymbolByChain === 'object') {
+          const next: Record<string, string> = {};
+          for (const [key, value] of Object.entries(parsed.selectedPairSymbolByChain)) {
+            if (typeof value === 'string') next[key] = value;
+          }
+          setSelectedPairSymbolByChain(next);
         }
       }
     } catch {
@@ -387,15 +409,18 @@ export function ProTerminal() {
       mobilePanel,
       accountTab,
       favorites,
-      selectedPairByChain
+      selectedPairByChain,
+      selectedPairSymbolByChain
     };
     window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(payload));
-  }, [accountTab, bookTab, chainId, favorites, filter, mobilePanel, ready, searchQuery, selectedPairByChain, timeframe]);
+  }, [accountTab, bookTab, chainId, favorites, filter, mobilePanel, ready, searchQuery, selectedPairByChain, selectedPairSymbolByChain, timeframe]);
 
   useEffect(() => {
-    const current = selectedPairByChain[String(chainId)];
+    const chainKey = String(chainId);
+    const current = normalizeSavedPairId(selectedPairByChain[chainKey] || '');
+    const currentPairSymbol = selectedPairSymbolByChain[chainKey];
 
-    if (!marketVM.rows.length) {
+    if (!marketVM.allRows.length) {
       setSelectedPairId('');
       return;
     }
@@ -409,9 +434,17 @@ export function ProTerminal() {
       return;
     }
 
+    if (currentPairSymbol) {
+      const bySymbol = marketVM.allRows.find((row) => row.pair === currentPairSymbol);
+      if (bySymbol) {
+        setSelectedPairId(bySymbol.id);
+        return;
+      }
+    }
+
     const preferred = marketVM.rows.find((row) => row.pair.includes('MUSD')) || marketVM.rows[0];
     setSelectedPairId(preferred.id);
-  }, [chainId, marketVM.allRows, marketVM.rows, selectedPairByChain, selectedPairId]);
+  }, [chainId, marketVM.allRows, marketVM.rows, selectedPairByChain, selectedPairId, selectedPairSymbolByChain]);
 
   useEffect(() => {
     if (!selectedPairId) return;
@@ -423,6 +456,15 @@ export function ProTerminal() {
   }, [chainId, selectedPairId]);
 
   const selectedPair = useMemo(() => marketVM.allRows.find((row) => row.id === selectedPairId) || null, [marketVM.allRows, selectedPairId]);
+
+  useEffect(() => {
+    if (!selectedPair) return;
+    const key = String(chainId);
+    setSelectedPairSymbolByChain((current) => {
+      if (current[key] === selectedPair.pair) return current;
+      return { ...current, [key]: selectedPair.pair };
+    });
+  }, [chainId, selectedPair]);
 
   const tradesVM = useTradesVM(chainId, selectedPair, refreshNonce);
   const pairVM = usePairVM({ chainId, selectedPair, trades: tradesVM.trades, timeframe, refreshNonce });
@@ -449,6 +491,16 @@ export function ProTerminal() {
   }, [entryVM.walletBalances]);
   const needsMusdOnboarding = entryVM.isConnected && Number.isFinite(musdBalance) && musdBalance <= 0.0000001;
 
+  const selectPair = useCallback(
+    (row: MarketRow) => {
+      setSelectedPairId(row.id);
+      const key = String(chainId);
+      setSelectedPairByChain((current) => (current[key] === row.id ? current : { ...current, [key]: row.id }));
+      setSelectedPairSymbolByChain((current) => (current[key] === row.pair ? current : { ...current, [key]: row.pair }));
+    },
+    [chainId]
+  );
+
   const setupFirstTradeToMusd = useCallback(() => {
     const normalizedWrapped = entryVM.wrappedNativeSymbol.toUpperCase();
     const musdPairs = marketVM.allRows.filter(
@@ -462,7 +514,7 @@ export function ProTerminal() {
       null;
 
     if (!preferred) return;
-    setSelectedPairId(preferred.id);
+    selectPair(preferred);
     entryVM.setEntryMode('market');
     if (preferred.token0 === 'MUSD') {
       entryVM.setSide('buy');
@@ -473,7 +525,7 @@ export function ProTerminal() {
       entryVM.setAmount('0.1');
     }
     setMobilePanel('trade');
-  }, [entryVM, marketVM.allRows]);
+  }, [entryVM, marketVM.allRows, selectPair]);
 
   const applyMarketChip = (chip: MarketChip) => {
     setMarketChip(chip);
@@ -516,7 +568,7 @@ export function ProTerminal() {
         event.preventDefault();
         const current = Math.max(0, marketVM.rows.findIndex((row) => row.id === selectedPairId));
         const next = event.key === 'ArrowDown' ? Math.min(marketVM.rows.length - 1, current + 1) : Math.max(0, current - 1);
-        setSelectedPairId(marketVM.rows[next].id);
+        selectPair(marketVM.rows[next]);
       }
 
       if (event.key === 'Enter' && selectedPair) {
@@ -531,13 +583,32 @@ export function ProTerminal() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [entryVM, marketVM.rows, selectedPair, selectedPairId]);
+  }, [entryVM, marketVM.rows, selectPair, selectedPair, selectedPairId]);
 
   useEffect(() => {
     if (!uiNotice) return undefined;
     const timer = window.setTimeout(() => setUiNotice(''), 3600);
     return () => window.clearTimeout(timer);
   }, [uiNotice]);
+
+  useEffect(() => {
+    if (!walletMenuOpen) return undefined;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!walletMenuRef.current) return;
+      if (!walletMenuRef.current.contains(event.target as Node)) {
+        setWalletMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [walletMenuOpen]);
+
+  const accountExplorerUrl = useMemo(() => {
+    if (!address) return '';
+    if (chainId === 97) return `https://testnet.bscscan.com/address/${address}`;
+    if (chainId === 11155111) return `https://sepolia.etherscan.io/address/${address}`;
+    return '';
+  }, [address, chainId]);
 
   const openSelectedInHarmony = useCallback(() => {
     if (!selectedPair) {
@@ -562,7 +633,7 @@ export function ProTerminal() {
 
   const fullRefresh = useCallback(() => {
     setRefreshNonce((value) => value + 1);
-    setUiNotice('Refreshing market, trades, and analytics...');
+    setUiNotice(`Refreshing market, trades, and analytics... ${new Date().toLocaleTimeString()}`);
   }, []);
 
   const executePrimary = async () => {
@@ -574,7 +645,7 @@ export function ProTerminal() {
   };
 
   return (
-    <div className={`flex min-h-screen flex-col bg-[#06111d] text-slate-100 ${denseMode ? 'text-[12px] leading-5' : 'text-[14px] leading-6'}`}>
+    <div className={`flex min-h-screen flex-col bg-[#06111d] text-slate-100 ${denseMode ? 'text-[13px] leading-5' : 'text-[15px] leading-6'}`}>
       <header className="flex h-16 items-center justify-between border-b border-[#183344] bg-[#09141f] px-4">
         <div className="flex min-w-0 items-center gap-5">
           <div className="flex items-center gap-2">
@@ -593,12 +664,26 @@ export function ProTerminal() {
             ))}
           </nav>
         </div>
-        <div className="flex items-center gap-2">
-          <button className="rounded-md border border-[#204257] bg-[#0c1a29] px-3 py-1.5 text-sm text-slate-200">{shortAddress(address)}</button>
+        <div ref={walletMenuRef} className="relative flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setWalletMenuOpen((open) => !open)}
+            className={`rounded-md border bg-[#0c1a29] px-3 py-1.5 text-sm text-slate-200 transition ${
+              walletMenuOpen ? 'border-[#57d6ca] text-[#79e7dc]' : 'border-[#204257] hover:border-[#57d6ca]'
+            }`}
+          >
+            {shortAddress(address)}
+          </button>
           <button
             type="button"
             title="Toggle compact density"
-            onClick={() => setDenseMode((value) => !value)}
+            onClick={() =>
+              setDenseMode((value) => {
+                const next = !value;
+                setUiNotice(next ? 'Dense typography enabled.' : 'Comfortable typography enabled.');
+                return next;
+              })
+            }
             className="h-9 w-9 rounded-md border border-[#204257] bg-[#0c1a29] text-sm text-slate-200 transition hover:border-[#57d6ca]"
           >
             ◰
@@ -614,13 +699,54 @@ export function ProTerminal() {
           <button
             type="button"
             title="Open terminal settings"
-            onClick={() => setSettingsOpen((value) => !value)}
+            onClick={() =>
+              setSettingsOpen((value) => {
+                const next = !value;
+                setUiNotice(next ? 'Terminal settings opened.' : 'Terminal settings closed.');
+                return next;
+              })
+            }
             className={`h-9 w-9 rounded-md border bg-[#0c1a29] text-sm text-slate-200 transition ${
               settingsOpen ? 'border-[#57d6ca] text-[#79e7dc]' : 'border-[#204257] hover:border-[#57d6ca]'
             }`}
           >
             ⚙
           </button>
+          {walletMenuOpen ? (
+            <div className="absolute right-0 top-12 z-40 w-64 rounded-md border border-[#21445b] bg-[#0b1a29] p-2 shadow-[0_18px_60px_rgba(0,0,0,0.45)]">
+              <p className="truncate px-2 py-1 text-xs text-slate-400">Wallet</p>
+              <p className="truncate px-2 pb-1 text-xs text-[#79e7dc]">{address || 'Not connected'}</p>
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = await copyText(address || '');
+                  setUiNotice(ok ? 'Wallet address copied.' : 'Clipboard unavailable.');
+                  setWalletMenuOpen(false);
+                }}
+                className="mt-1 flex w-full items-center rounded px-2 py-1.5 text-left text-sm text-slate-200 hover:bg-[#123245]"
+              >
+                Copy address
+              </button>
+              {accountExplorerUrl ? (
+                <a
+                  href={accountExplorerUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 flex w-full items-center rounded px-2 py-1.5 text-left text-sm text-slate-200 hover:bg-[#123245]"
+                  onClick={() => setWalletMenuOpen(false)}
+                >
+                  Open in explorer
+                </a>
+              ) : null}
+              <Link
+                href="/harmony?intent=deposit"
+                className="mt-1 flex w-full items-center rounded px-2 py-1.5 text-left text-sm text-slate-200 hover:bg-[#123245]"
+                onClick={() => setWalletMenuOpen(false)}
+              >
+                Open deposit flow
+              </Link>
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -883,7 +1009,7 @@ export function ProTerminal() {
                       <button
                         key={row.id}
                         type="button"
-                        onClick={() => setSelectedPairId(row.id)}
+                        onClick={() => selectPair(row)}
                         className={`grid w-full grid-cols-[24px_minmax(0,1fr)_90px_110px_88px_106px] gap-2 px-2 py-1.5 text-xs ${
                           isSelected ? 'bg-[#173449]' : 'hover:bg-[#102436]'
                         }`}

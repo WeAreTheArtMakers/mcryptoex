@@ -208,6 +208,14 @@ function normalizeSymbol(symbol: string): string {
   return symbol.trim().toUpperCase();
 }
 
+function normalizePoolAddress(poolAddress: string): string {
+  return String(poolAddress || '').trim().toLowerCase();
+}
+
+function pairId(chainId: number, poolAddress: string): string {
+  return `${chainId}:${normalizePoolAddress(poolAddress)}`;
+}
+
 export function shortAmount(value: string | number): string {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return String(value);
@@ -430,8 +438,8 @@ function computePairStatsMap(pairs: PairRow[], chainId: number, ledgerRows: Ledg
   >();
 
   for (const pair of filteredPairs) {
-    const id = `${pair.chain_id}:${pair.pool_address}`;
-    pairByPool.set(pair.pool_address.toLowerCase(), {
+    const id = pairId(pair.chain_id, pair.pool_address);
+    pairByPool.set(normalizePoolAddress(pair.pool_address), {
       id,
       token0: normalizeSymbol(pair.token0_symbol),
       token1: normalizeSymbol(pair.token1_symbol),
@@ -513,7 +521,7 @@ function parseMarketRows(pairs: PairRow[], chainId: number, pairStats: Map<strin
   const rows = pairs
     .filter((pair) => Number(pair.chain_id) === chainId)
     .map((pair) => {
-      const id = `${pair.chain_id}:${pair.pool_address}`;
+      const id = pairId(pair.chain_id, pair.pool_address);
       const reserve0 = n(pair.reserve0_decimal);
       const reserve1 = n(pair.reserve1_decimal);
       const fallbackLast = reserve0 > 0 ? reserve1 / reserve0 : null;
