@@ -29,6 +29,24 @@ const WRAPPED_NATIVE_DEFAULTS: Record<number, string> = {
   11155111: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14' // WETH (Sepolia)
 };
 
+const DEFAULT_MAJOR_TARGET_SYMBOLS = ['WBTC', 'WETH', 'WSOL', 'WAVAX'];
+
+const DEFAULT_TARGET_DECIMALS: Record<string, number> = {
+  WBTC: 8,
+  WETH: 18,
+  WBNB: 18,
+  WSOL: 9,
+  WAVAX: 18
+};
+
+const DEFAULT_TARGET_NAMES: Record<string, string> = {
+  WBTC: 'Wrapped Bitcoin',
+  WETH: 'Wrapped Ether',
+  WBNB: 'Wrapped BNB',
+  WSOL: 'Wrapped SOL',
+  WAVAX: 'Wrapped AVAX'
+};
+
 const WRAPPED_NATIVE_ABI = [
   'function deposit() payable',
   'function symbol() view returns (string)',
@@ -36,6 +54,9 @@ const WRAPPED_NATIVE_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function approve(address,uint256) returns (bool)'
 ] as const;
+
+const FACTORY_PAIRS_ABI = ['function allPairsLength() view returns (uint256)', 'function allPairs(uint256) view returns (address)'] as const;
+const PAIR_TOKENS_ABI = ['function token0() view returns (address)', 'function token1() view returns (address)'] as const;
 
 function registryPathForNetwork(): string {
   const explicit = process.env.ADDRESS_REGISTRY_PATH;
@@ -71,6 +92,10 @@ function normalizeSymbolEnvKey(symbol: string): string {
   return symbol.toUpperCase().replace(/[^A-Z0-9]/g, '_');
 }
 
+function normalizeSymbol(symbol: string): string {
+  return symbol.trim().toUpperCase();
+}
+
 function amountEnv(name: string, defaultValue: string): string {
   const value = process.env[name];
   if (!value || !value.trim()) return defaultValue;
@@ -80,6 +105,48 @@ function amountEnv(name: string, defaultValue: string): string {
 function amountEnvForSymbol(prefix: string, symbol: string, fallbackKey: string, defaultValue: string): string {
   const key = `${prefix}_${normalizeSymbolEnvKey(symbol)}_AMOUNT`;
   return amountEnv(key, amountEnv(fallbackKey, defaultValue));
+}
+
+function tokenAddressEnvForSymbol(symbol: string): string {
+  const value = process.env[`BOOTSTRAP_TOKEN_${normalizeSymbolEnvKey(symbol)}_ADDRESS`];
+  if (!value) return '';
+  return value.trim();
+}
+
+function defaultLpTokenAmount(symbol: string, decimals: number): string {
+  const key = normalizeSymbol(symbol);
+  if (key === 'WBTC') return '0.05';
+  if (key === 'WETH' || key === 'WBNB') return '0.5';
+  if (key === 'WSOL') return '8';
+  if (key === 'WAVAX') return '5';
+  if (decimals <= 8) return '1';
+  return '10';
+}
+
+function defaultLpMusdAmount(symbol: string): string {
+  const key = normalizeSymbol(symbol);
+  if (key === 'WBTC') return '40';
+  if (key === 'WETH' || key === 'WBNB') return '40';
+  if (key === 'WSOL') return '40';
+  if (key === 'WAVAX') return '40';
+  return '25';
+}
+
+function scaleAmount(amount: bigint, fromDecimals: number, toDecimals: number): bigint {
+  if (fromDecimals === toDecimals) return amount;
+  if (toDecimals > fromDecimals) {
+    return amount * 10n ** BigInt(toDecimals - fromDecimals);
+  }
+  const factor = 10n ** BigInt(fromDecimals - toDecimals);
+  return amount / factor;
+}
+
+async function deployMockTargetToken(symbol: string, decimals: number): Promise<string> {
+  const MockERC20 = await ethers.getContractFactory('MockERC20');
+  const name = DEFAULT_TARGET_NAMES[normalizeSymbol(symbol)] || `${symbol} Token`;
+  const token = await MockERC20.deploy(name, symbol, decimals);
+  await token.waitForDeployment();
+  return token.getAddress();
 }
 
 function dedupeCollaterals(items: CollateralConfig[]): CollateralConfig[] {
@@ -212,12 +279,103 @@ async function main(): Promise<void> {
   const collateralTargets = resolveCollateralTargets(registry);
   const deadline = Math.floor(Date.now() / 1000) + 1800;
   const createdPools: Array<{ symbol: string; token: string; pair: string }> = [];
+  const handledTokenAddresses = new Set<string>();
+  const collateralBySymbol = new Map<string, { token: string; decimals: number }>();
+  const mintSources: Array<{ token: string; symbol: string; decimals: number }> = [];
+  const musdAddress = (await musd.getAddress()).toLowerCase();
+  const chainId = Number(network.config.chainId || 0);
+  const wrappedNativeTokenAddress =
+    process.env.BOOTSTRAP_WRAPPED_NATIVE_TOKEN?.trim() || WRAPPED_NATIVE_DEFAULTS[chainId] || '';
+  const existingTokenBySymbol = new Map<string, string>();
+
+  try {
+    const factoryPairs = await ethers.getContractAt(FACTORY_PAIRS_ABI, await factory.getAddress());
+    const pairLength = Number(await factoryPairs.allPairsLength());
+    for (let idx = 0; idx < pairLength; idx += 1) {
+      const pairAddress = await factoryPairs.allPairs(idx);
+      if (!ethers.isAddress(pairAddress)) continue;
+      const pair = await ethers.getContractAt(PAIR_TOKENS_ABI, pairAddress);
+      const token0 = (await pair.token0()).toLowerCase();
+      const token1 = (await pair.token1()).toLowerCase();
+      const tokenCandidates = [token0, token1].filter((token) => token !== musdAddress);
+      for (const candidate of tokenCandidates) {
+        if (!ethers.isAddress(candidate)) continue;
+        const token = await ethers.getContractAt('IERC20Metadata', candidate);
+        const symbol = normalizeSymbol(await token.symbol().catch(() => ''));
+        if (!symbol || existingTokenBySymbol.has(symbol)) continue;
+        existingTokenBySymbol.set(symbol, candidate);
+      }
+    }
+  } catch (error) {
+    console.log('pair symbol pre-scan skipped');
+    console.log(String(error));
+  }
+
+  async function ensureMusdBalance(requiredMusdRaw: bigint): Promise<boolean> {
+    const current = await musd.balanceOf(deployer.address);
+    if (current >= requiredMusdRaw) return true;
+
+    if (!mintSources.length) {
+      console.log(
+        `cannot top up mUSD: no collateral mint source available required=${ethers.formatEther(requiredMusdRaw)} available=${ethers.formatEther(
+          current
+        )}`
+      );
+      return false;
+    }
+
+    const prioritized = [...mintSources].sort((a, b) => {
+      const aStable = a.symbol.toUpperCase() === 'USDC' || a.symbol.toUpperCase() === 'USDT';
+      const bStable = b.symbol.toUpperCase() === 'USDC' || b.symbol.toUpperCase() === 'USDT';
+      if (aStable === bStable) return 0;
+      return aStable ? -1 : 1;
+    });
+
+    let available = current;
+    for (const source of prioritized) {
+      if (available >= requiredMusdRaw) break;
+      const deficit = requiredMusdRaw - available;
+      const collateralNeeded = scaleAmount(deficit, 18, source.decimals);
+      const collateralWithBuffer = collateralNeeded + collateralNeeded / 3n + 1n; // +33% to absorb mint fees / oracle spread
+
+      const canTopUp = await ensureTokenBalance(
+        source.token,
+        deployer.address,
+        collateralWithBuffer,
+        source.symbol,
+        source.decimals
+      );
+      if (!canTopUp) {
+        continue;
+      }
+
+      const sourceToken = await ethers.getContractAt('IERC20Metadata', source.token);
+      await (await sourceToken.approve(await stabilizer.getAddress(), collateralWithBuffer)).wait();
+      await (await stabilizer.mintWithCollateral(source.token, collateralWithBuffer, 0, deployer.address)).wait();
+      available = await musd.balanceOf(deployer.address);
+      console.log(
+        `mUSD topped up via ${source.symbol}: collateral=${ethers.formatUnits(collateralWithBuffer, source.decimals)} balance=${ethers.formatEther(
+          available
+        )}`
+      );
+    }
+
+    if (available < requiredMusdRaw) {
+      console.log(
+        `mUSD top-up still insufficient required=${ethers.formatEther(requiredMusdRaw)} available=${ethers.formatEther(available)}`
+      );
+      return false;
+    }
+    return true;
+  }
 
   for (const target of collateralTargets) {
     const tokenAddress = target.token;
     const collateral = await ethers.getContractAt('IERC20Metadata', tokenAddress);
-    const symbol = target.symbol || (await collateral.symbol());
+    const symbol = normalizeSymbol(target.symbol || (await collateral.symbol()));
     const decimals = Number(await collateral.decimals());
+    collateralBySymbol.set(symbol, { token: tokenAddress, decimals });
+    mintSources.push({ token: tokenAddress, symbol, decimals });
 
     await maybeSetMockPrice(registry.contracts.oracle, tokenAddress, symbol);
 
@@ -244,8 +402,9 @@ async function main(): Promise<void> {
       continue;
     }
 
+    const canTopUpMusd = await ensureMusdBalance(lpMusdRaw);
     const musdBalance = await musd.balanceOf(deployer.address);
-    if (musdBalance < lpMusdRaw) {
+    if (!canTopUpMusd || musdBalance < lpMusdRaw) {
       console.log(
         `skip LP for ${symbol}: mUSD balance insufficient required=${ethers.formatEther(lpMusdRaw)} available=${ethers.formatEther(
           musdBalance
@@ -275,16 +434,13 @@ async function main(): Promise<void> {
 
     const pair = await factory.getPair(await musd.getAddress(), tokenAddress);
     createdPools.push({ symbol, token: tokenAddress, pair });
+    handledTokenAddresses.add(tokenAddress.toLowerCase());
     console.log(`added LP: ${symbol} pair=${pair}`);
   }
 
   if (boolEnv('BOOTSTRAP_ENABLE_WRAPPED_NATIVE_POOL', true)) {
-    const explicitWrapped = process.env.BOOTSTRAP_WRAPPED_NATIVE_TOKEN?.trim() || '';
-    const fallbackWrapped = WRAPPED_NATIVE_DEFAULTS[Number(network.config.chainId || 0)] || '';
-    const wrappedTokenAddress = explicitWrapped || fallbackWrapped;
-
-    if (wrappedTokenAddress && ethers.isAddress(wrappedTokenAddress)) {
-      const wrapped = await ethers.getContractAt(WRAPPED_NATIVE_ABI, wrappedTokenAddress);
+    if (wrappedNativeTokenAddress && ethers.isAddress(wrappedNativeTokenAddress)) {
+      const wrapped = await ethers.getContractAt(WRAPPED_NATIVE_ABI, wrappedNativeTokenAddress);
       const symbol = await wrapped.symbol().catch(() => (network.name.includes('bsc') ? 'WBNB' : 'WETH'));
       const decimals = Number(await wrapped.decimals().catch(() => 18));
 
@@ -309,8 +465,9 @@ async function main(): Promise<void> {
       }
 
       const wrappedBalanceAfter = await wrapped.balanceOf(deployer.address);
+      const canTopUpMusd = await ensureMusdBalance(musdForWrapped);
       const musdBalance = await musd.balanceOf(deployer.address);
-      if (wrappedBalanceAfter >= wrappedRaw && musdBalance >= musdForWrapped) {
+      if (wrappedBalanceAfter >= wrappedRaw && canTopUpMusd && musdBalance >= musdForWrapped) {
         await (await wrapped.approve(await router.getAddress(), wrappedRaw)).wait();
         await (await musd.approve(await router.getAddress(), musdForWrapped)).wait();
 
@@ -320,7 +477,7 @@ async function main(): Promise<void> {
         await (
           await router.addLiquidity(
             await musd.getAddress(),
-            wrappedTokenAddress,
+            wrappedNativeTokenAddress,
             musdForWrapped,
             wrappedRaw,
             minMusd,
@@ -330,8 +487,9 @@ async function main(): Promise<void> {
           )
         ).wait();
 
-        const pair = await factory.getPair(await musd.getAddress(), wrappedTokenAddress);
-        createdPools.push({ symbol, token: wrappedTokenAddress, pair });
+        const pair = await factory.getPair(await musd.getAddress(), wrappedNativeTokenAddress);
+        createdPools.push({ symbol, token: wrappedNativeTokenAddress, pair });
+        handledTokenAddresses.add(wrappedNativeTokenAddress.toLowerCase());
         console.log(`added LP: ${symbol} pair=${pair}`);
       } else {
         console.log(
@@ -341,6 +499,118 @@ async function main(): Promise<void> {
           )}`
         );
       }
+    }
+  }
+
+  if (boolEnv('BOOTSTRAP_ENABLE_MAJOR_POOLS', true)) {
+    const targetSymbols = parseCsv(process.env.BOOTSTRAP_TARGET_SYMBOLS || DEFAULT_MAJOR_TARGET_SYMBOLS.join(','))
+      .map(normalizeSymbol)
+      .filter((symbol, index, all) => symbol.length > 0 && all.indexOf(symbol) === index);
+
+    const deployMocks = boolEnv('BOOTSTRAP_DEPLOY_MOCK_TARGETS', true);
+    const defaultWrappedSymbol = network.name.includes('bsc') ? 'WBNB' : 'WETH';
+
+    for (const symbol of targetSymbols) {
+      let tokenAddress = '';
+      let decimals = DEFAULT_TARGET_DECIMALS[symbol] || 18;
+
+      const envAddress = tokenAddressEnvForSymbol(symbol);
+      if (envAddress && ethers.isAddress(envAddress)) {
+        tokenAddress = envAddress;
+      } else if (collateralBySymbol.has(symbol)) {
+        const known = collateralBySymbol.get(symbol)!;
+        tokenAddress = known.token;
+        decimals = known.decimals;
+      } else if (existingTokenBySymbol.has(symbol)) {
+        tokenAddress = existingTokenBySymbol.get(symbol)!;
+      } else if (
+        wrappedNativeTokenAddress &&
+        ethers.isAddress(wrappedNativeTokenAddress) &&
+        symbol === defaultWrappedSymbol
+      ) {
+        tokenAddress = wrappedNativeTokenAddress;
+      }
+
+      if (!tokenAddress && deployMocks) {
+        try {
+          tokenAddress = await deployMockTargetToken(symbol, decimals);
+          console.log(`deployed mock target token ${symbol}: ${tokenAddress}`);
+        } catch (error) {
+          console.log(`failed to deploy mock target token ${symbol}`);
+          console.log(String(error));
+          continue;
+        }
+      }
+
+      if (!tokenAddress || !ethers.isAddress(tokenAddress)) {
+        console.log(`skip ${symbol}: token address is not configured`);
+        continue;
+      }
+      if (tokenAddress.toLowerCase() === musdAddress) continue;
+      if (handledTokenAddresses.has(tokenAddress.toLowerCase())) continue;
+
+      const token = await ethers.getContractAt('IERC20Metadata', tokenAddress);
+      decimals = Number(await token.decimals().catch(() => decimals));
+
+      const lpTokenAmount = amountEnvForSymbol(
+        'BOOTSTRAP_LP',
+        symbol,
+        'BOOTSTRAP_LP_TARGET_TOKEN_AMOUNT',
+        defaultLpTokenAmount(symbol, decimals)
+      );
+      const lpMusdAmount = amountEnvForSymbol(
+        'BOOTSTRAP_LP_MUSD',
+        symbol,
+        'BOOTSTRAP_LP_TARGET_MUSD_AMOUNT',
+        defaultLpMusdAmount(symbol)
+      );
+
+      const lpTokenRaw = ethers.parseUnits(lpTokenAmount, decimals);
+      const lpMusdRaw = ethers.parseEther(lpMusdAmount);
+
+      const canProvideToken = await ensureTokenBalance(tokenAddress, deployer.address, lpTokenRaw, symbol, decimals);
+      if (!canProvideToken) {
+        console.log(`skip LP for ${symbol}: token balance is insufficient`);
+        continue;
+      }
+
+      const canTopUpMusd = await ensureMusdBalance(lpMusdRaw);
+      const musdBalance = await musd.balanceOf(deployer.address);
+      if (!canTopUpMusd || musdBalance < lpMusdRaw) {
+        console.log(
+          `skip LP for ${symbol}: mUSD balance insufficient required=${ethers.formatEther(lpMusdRaw)} available=${ethers.formatEther(
+            musdBalance
+          )}`
+        );
+        continue;
+      }
+
+      await (await token.approve(await router.getAddress(), lpTokenRaw)).wait();
+      await (await musd.approve(await router.getAddress(), lpMusdRaw)).wait();
+
+      const minToken = (lpTokenRaw * 99n) / 100n;
+      const minMusd = (lpMusdRaw * 99n) / 100n;
+
+      await (
+        await router.addLiquidity(
+          await musd.getAddress(),
+          tokenAddress,
+          lpMusdRaw,
+          lpTokenRaw,
+          minMusd,
+          minToken,
+          deployer.address,
+          deadline
+        )
+      ).wait();
+
+      const pair = await factory.getPair(await musd.getAddress(), tokenAddress);
+      createdPools.push({ symbol, token: tokenAddress, pair });
+      handledTokenAddresses.add(tokenAddress.toLowerCase());
+      if (!existingTokenBySymbol.has(symbol)) {
+        existingTokenBySymbol.set(symbol, tokenAddress.toLowerCase());
+      }
+      console.log(`added LP: ${symbol} pair=${pair}`);
     }
   }
 

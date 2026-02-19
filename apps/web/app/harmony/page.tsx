@@ -227,6 +227,9 @@ export default function HarmonyPage() {
   const [fundingStatus, setFundingStatus] = useState<string>('');
   const [fundingError, setFundingError] = useState<string>('');
   const [balanceRefreshNonce, setBalanceRefreshNonce] = useState(0);
+  const [showAdvancedFunding, setShowAdvancedFunding] = useState(false);
+  const [firstTradeIntent, setFirstTradeIntent] = useState(false);
+  const [requestedOutput, setRequestedOutput] = useState('');
 
   const { address, chainId: walletChainId, isConnected } = useAccount();
   const { chains, switchChain, isPending: isSwitching } = useSwitchChain();
@@ -239,6 +242,13 @@ export default function HarmonyPage() {
     () => networkOptions.find((network) => network.chain_id === chainId),
     [networkOptions, chainId]
   );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    setFirstTradeIntent(params.get('intent') === 'first-trade');
+    setRequestedOutput((params.get('output') || '').trim().toUpperCase());
+  }, []);
 
   useEffect(() => {
     if (networkOptions.some((network) => network.chain_id === chainId)) {
@@ -288,6 +298,28 @@ export default function HarmonyPage() {
     const musd = chainTokens.find((token) => token.symbol.toUpperCase() === 'MUSD');
     return musd?.symbol ?? 'mUSD';
   }, [chainTokens]);
+
+  useEffect(() => {
+    if (!firstTradeIntent) return;
+    const desiredOut = requestedOutput && tokenBySymbolUpper.has(requestedOutput) ? requestedOutput : musdSymbol.toUpperCase();
+    const outToken = tokenBySymbolUpper.get(desiredOut);
+    if (outToken && tokenOut.toUpperCase() !== outToken.symbol.toUpperCase()) {
+      setTokenOut(outToken.symbol);
+    }
+
+    if (tokenIn.toUpperCase() === outToken?.symbol.toUpperCase()) {
+      const fallbackIn = tokenBySymbolUpper.get(wrappedNativeSymbol.toUpperCase());
+      if (fallbackIn) {
+        setTokenIn(fallbackIn.symbol);
+      }
+    }
+  }, [firstTradeIntent, musdSymbol, requestedOutput, tokenBySymbolUpper, tokenIn, tokenOut, wrappedNativeSymbol]);
+
+  useEffect(() => {
+    if (firstTradeIntent) {
+      setShowAdvancedFunding(false);
+    }
+  }, [firstTradeIntent, chainId]);
 
   useEffect(() => {
     const current = musdMintSource.toUpperCase();
@@ -906,6 +938,41 @@ export default function HarmonyPage() {
         <p className="mt-2 text-sm text-slate-200">
           Quotes are registry-aware and liquidity-aware. Execution is non-custodial and signed in your wallet.
         </p>
+        {firstTradeIntent ? (
+          <div className="mt-4 rounded-xl border border-brass/50 bg-amber-950/20 p-4 text-sm text-amber-100">
+            <p className="text-xs uppercase tracking-[0.16em] text-amber-200">Quick Start</p>
+            <p className="mt-1">
+              First convert your wallet funds into {musdSymbol}, then continue trading in Exchange Pro.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setTokenOut(musdSymbol)}
+                className="rounded-lg border border-brass/70 bg-brass/20 px-2.5 py-1.5 text-xs font-semibold text-amber-100"
+              >
+                Set Output = {musdSymbol}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTokenIn(wrappedNativeSymbol);
+                  setTokenOut(musdSymbol);
+                  setAmountIn(wrapAmount || '0.1');
+                  setQuote(null);
+                }}
+                className="rounded-lg border border-cyan-300/60 bg-cyan-500/20 px-2.5 py-1.5 text-xs font-semibold text-cyan-100"
+              >
+                Use {wrappedNativeSymbol} {'->'} {musdSymbol}
+              </button>
+              <a
+                href="/pro"
+                className="rounded-lg border border-mint/60 bg-mint/15 px-2.5 py-1.5 text-xs font-semibold text-mint hover:bg-mint/20"
+              >
+                Open Exchange Pro
+              </a>
+            </div>
+          </div>
+        ) : null}
 
         <form onSubmit={requestQuote} className="mt-5 space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -1149,7 +1216,19 @@ export default function HarmonyPage() {
             </div>
           ) : null}
 
-          <div className="mt-3 rounded-lg border border-cyan-300/40 bg-cyan-500/10 p-3">
+          <div className="mt-3 flex items-center justify-between rounded-lg border border-slateblue/50 bg-slate-900/50 px-3 py-2">
+            <p className="text-xs uppercase tracking-[0.14em] text-slate-200">Advanced Funding Tools</p>
+            <button
+              type="button"
+              onClick={() => setShowAdvancedFunding((value) => !value)}
+              className="rounded border border-slateblue/70 bg-slate-950/70 px-2 py-1 text-[11px] text-slate-200"
+            >
+              {showAdvancedFunding ? 'Hide' : 'Show'}
+            </button>
+          </div>
+
+          {showAdvancedFunding ? (
+            <div className="mt-3 rounded-lg border border-cyan-300/40 bg-cyan-500/10 p-3">
             <p className="text-xs uppercase tracking-[0.14em] text-cyan-100">Fund Wallet With Native Token</p>
             <div className="mt-2 flex flex-wrap gap-2">
               <input
@@ -1276,7 +1355,12 @@ export default function HarmonyPage() {
             </div>
             {fundingError ? <p className="mt-2 text-xs text-rose-300">{fundingError}</p> : null}
             {fundingStatus ? <p className="mt-2 text-xs text-cyan-100">{fundingStatus}</p> : null}
-          </div>
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-slate-300">
+              Keep this closed for normal user flow. Open only if you need testnet mint/wrap helpers.
+            </p>
+          )}
         </section>
 
         <section className="rounded-2xl border border-amber-400/35 bg-amber-500/10 p-4 text-sm text-amber-100">
