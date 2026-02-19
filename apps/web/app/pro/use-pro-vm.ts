@@ -458,7 +458,7 @@ function computePairStatsMap(pairs: PairRow[], chainId: number, ledgerRows: Ledg
 }
 
 function parseMarketRows(pairs: PairRow[], chainId: number, pairStats: Map<string, PairStats>): MarketRow[] {
-  return pairs
+  const rows = pairs
     .filter((pair) => Number(pair.chain_id) === chainId)
     .map((pair) => {
       const id = `${pair.chain_id}:${pair.pool_address}`;
@@ -481,13 +481,31 @@ function parseMarketRows(pairs: PairRow[], chainId: number, pairStats: Map<strin
         reserve1,
         totalFeeUsd: n(pair.total_fee_usd),
         lastSwapAt: stats?.lastSwapAt ?? pair.last_swap_at ?? null
-      };
-    })
-    .sort((a, b) => {
-      if (b.volume24h !== a.volume24h) return b.volume24h - a.volume24h;
-      if (b.swaps !== a.swaps) return b.swaps - a.swaps;
-      return (b.last || 0) - (a.last || 0);
+      } as MarketRow;
     });
+
+  const preferredByPair = new Map<string, MarketRow>();
+  for (const row of rows) {
+    const current = preferredByPair.get(row.pair);
+    if (!current) {
+      preferredByPair.set(row.pair, row);
+      continue;
+    }
+
+    const currentLiquidity = current.reserve0 * current.reserve1;
+    const nextLiquidity = row.reserve0 * row.reserve1;
+    const currentScore = current.volume24h * 1_000_000 + current.swaps * 1_000 + currentLiquidity;
+    const nextScore = row.volume24h * 1_000_000 + row.swaps * 1_000 + nextLiquidity;
+    if (nextScore > currentScore) {
+      preferredByPair.set(row.pair, row);
+    }
+  }
+
+  return Array.from(preferredByPair.values()).sort((a, b) => {
+    if (b.volume24h !== a.volume24h) return b.volume24h - a.volume24h;
+    if (b.swaps !== a.swaps) return b.swaps - a.swaps;
+    return (b.last || 0) - (a.last || 0);
+  });
 }
 
 function parseTrades(rows: LedgerEntry[], selectedPair?: MarketRow | null): TradeRow[] {
