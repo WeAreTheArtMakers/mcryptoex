@@ -223,6 +223,7 @@ export default function HarmonyPage() {
   const [testMintAmount, setTestMintAmount] = useState<string>('250');
   const [musdMintAmount, setMusdMintAmount] = useState<string>('100');
   const [musdMintSource, setMusdMintSource] = useState<string>('USDC');
+  const [mintableByUser, setMintableByUser] = useState<Record<string, boolean>>({});
   const [fundingStatus, setFundingStatus] = useState<string>('');
   const [fundingError, setFundingError] = useState<string>('');
   const [balanceRefreshNonce, setBalanceRefreshNonce] = useState(0);
@@ -414,6 +415,44 @@ export default function HarmonyPage() {
       active = false;
     };
   }, [address, publicClient, chainTokens, balanceRefreshNonce]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function probeMintCapabilities() {
+      if (!address || !publicClient) {
+        setMintableByUser({});
+        return;
+      }
+
+      const next: Record<string, boolean> = {};
+      for (const symbol of ['USDC', 'USDT']) {
+        const token = tokenBySymbolUpper.get(symbol);
+        if (!token || !isAddress(token.address)) continue;
+        try {
+          await publicClient.simulateContract({
+            account: address,
+            address: token.address as Address,
+            abi: mintableErc20Abi,
+            functionName: 'mint',
+            args: [address, 1n]
+          });
+          next[symbol] = true;
+        } catch {
+          next[symbol] = false;
+        }
+      }
+
+      if (active) {
+        setMintableByUser(next);
+      }
+    }
+
+    probeMintCapabilities();
+    return () => {
+      active = false;
+    };
+  }, [address, publicClient, tokenBySymbolUpper]);
 
   function onChainChange(nextChainId: number) {
     setChainId(nextChainId);
@@ -712,6 +751,12 @@ export default function HarmonyPage() {
     }
     if (!publicClient || !walletClient) {
       setFundingError('Wallet client is not ready.');
+      return;
+    }
+    if (mintableByUser[symbol] === false) {
+      setFundingError(
+        `${symbol} mint is permissioned on this deployment. Use faucet funding or operator seed for ${symbol}.`
+      );
       return;
     }
 
@@ -1178,21 +1223,28 @@ export default function HarmonyPage() {
                   <button
                     type="button"
                     onClick={() => mintTestToken('USDC')}
+                    disabled={mintableByUser.USDC === false}
                     className="rounded-lg border border-cyan-300/60 bg-cyan-500/20 px-2.5 py-1.5 text-xs font-semibold text-cyan-100"
                   >
-                    Mint USDC (test)
+                    {mintableByUser.USDC === false ? 'USDC mint locked' : 'Mint USDC (test)'}
                   </button>
                 ) : null}
                 {tokenBySymbolUpper.has('USDT') ? (
                   <button
                     type="button"
                     onClick={() => mintTestToken('USDT')}
+                    disabled={mintableByUser.USDT === false}
                     className="rounded-lg border border-emerald-300/60 bg-emerald-500/20 px-2.5 py-1.5 text-xs font-semibold text-emerald-100"
                   >
-                    Mint USDT (test)
+                    {mintableByUser.USDT === false ? 'USDT mint locked' : 'Mint USDT (test)'}
                   </button>
                 ) : null}
               </div>
+              {mintableByUser.USDC === false || mintableByUser.USDT === false ? (
+                <p className="mt-2 text-[11px] text-slate-300">
+                  This deployment uses permissioned collateral minting. Use testnet faucet or operator-funded balances.
+                </p>
+              ) : null}
               <div className="mt-2 flex flex-wrap gap-2">
                 <input
                   type="number"

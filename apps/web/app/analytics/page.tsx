@@ -27,6 +27,22 @@ type AnalyticsPayload = {
   conversion_slippage: Array<Record<string, string | number>>;
 };
 
+type PairRow = {
+  chain_id: number;
+  pool_address: string;
+  token0_symbol: string;
+  token1_symbol: string;
+  reserve0_decimal: string;
+  reserve1_decimal: string;
+  swaps: number;
+  total_fee_usd: string;
+  total_amount_in: string;
+};
+
+type PairsPayload = {
+  rows: PairRow[];
+};
+
 type NetworkItem = {
   chain_id: number;
   name: string;
@@ -50,6 +66,13 @@ type FeePoint = {
   fee: number;
 };
 
+type PoolSnapshotPoint = {
+  label: string;
+  liquidity: number;
+  feeUsd: number;
+  swaps: number;
+};
+
 function n(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -67,6 +90,7 @@ export default function AnalyticsPage() {
     { chain_id: 11155111, name: 'Ethereum Sepolia' }
   ]);
   const [payload, setPayload] = useState<AnalyticsPayload | null>(null);
+  const [pairRows, setPairRows] = useState<PairRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastUpdateAt, setLastUpdateAt] = useState<Date | null>(null);
@@ -78,9 +102,11 @@ export default function AnalyticsPage() {
       try {
         setLoading(true);
 
-        const [analyticsRes, tokensRes] = await Promise.all([
+        const pairsPath = chainFilter === 0 ? '/pairs?limit=120' : `/pairs?chain_id=${chainFilter}&limit=120`;
+        const [analyticsRes, tokensRes, pairsRes] = await Promise.all([
           fetch(`${API_BASE}/analytics?minutes=${minutes}`, { cache: 'no-store' }),
-          fetch(`${API_BASE}/tokens`, { cache: 'no-store' })
+          fetch(`${API_BASE}/tokens`, { cache: 'no-store' }),
+          fetch(`${API_BASE}${pairsPath}`, { cache: 'no-store' })
         ]);
 
         if (!analyticsRes.ok) {
@@ -89,19 +115,25 @@ export default function AnalyticsPage() {
         if (!tokensRes.ok) {
           throw new Error(`token registry unavailable (${tokensRes.status})`);
         }
+        if (!pairsRes.ok) {
+          throw new Error(`pairs endpoint unavailable (${pairsRes.status})`);
+        }
 
         const body = (await analyticsRes.json()) as AnalyticsPayload;
         const tokenBody = (await tokensRes.json()) as TokensPayload;
+        const pairBody = (await pairsRes.json()) as PairsPayload;
 
         if (!active) return;
 
         setPayload(body);
+        setPairRows(Array.isArray(pairBody.rows) ? pairBody.rows : []);
         if (tokenBody.networks?.length) setNetworks(tokenBody.networks);
         setLastUpdateAt(new Date());
         setError('');
       } catch (loadError) {
         if (!active) return;
         setPayload(null);
+        setPairRows([]);
         setError(loadError instanceof Error ? loadError.message : 'failed to load analytics');
       } finally {
         if (active) setLoading(false);
@@ -114,7 +146,7 @@ export default function AnalyticsPage() {
       active = false;
       clearInterval(timer);
     };
-  }, [minutes]);
+  }, [minutes, chainFilter]);
 
   const filtered = useMemo(() => {
     if (!payload) {
@@ -232,6 +264,18 @@ export default function AnalyticsPage() {
         .slice(-30),
     [filtered]
   );
+  const poolSnapshot = useMemo<PoolSnapshotPoint[]>(() => {
+    return pairRows
+      .filter((row) => chainFilter === 0 || Number(row.chain_id) === chainFilter)
+      .map((row) => ({
+        label: `${row.token0_symbol}/${row.token1_symbol}`,
+        liquidity: n(row.reserve0_decimal) + n(row.reserve1_decimal),
+        feeUsd: n(row.total_fee_usd),
+        swaps: n(row.swaps)
+      }))
+      .sort((a, b) => b.liquidity - a.liquidity)
+      .slice(0, 12);
+  }, [pairRows, chainFilter]);
 
   const summary = useMemo(() => {
     return {
@@ -241,9 +285,10 @@ export default function AnalyticsPage() {
       revenueMusd: sumDecimal(filtered.revenueRows, 'revenue_musd'),
       avgSlippageBps: filtered.slippageRows.length
         ? sumDecimal(filtered.slippageRows, 'slippage_bps') / filtered.slippageRows.length
-        : 0
+        : 0,
+      poolLiquidity: poolSnapshot.reduce((sum, row) => sum + row.liquidity, 0)
     };
-  }, [filtered]);
+  }, [filtered, poolSnapshot]);
 
   return (
     <section className="space-y-4 rounded-3xl border border-slateblue/70 bg-gradient-to-br from-[#101a34]/95 via-[#122744]/90 to-[#1a2f4d]/80 p-6">
@@ -312,6 +357,10 @@ export default function AnalyticsPage() {
               <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Conv. Slippage (bps)</p>
               <p className="mt-1 font-mono text-lg">{summary.avgSlippageBps.toFixed(2)}</p>
             </div>
+            <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Pool Liquidity (snapshot)</p>
+              <p className="mt-1 font-mono text-lg">{summary.poolLiquidity.toFixed(4)}</p>
+            </div>
           </div>
 
           <div className="grid gap-4 xl:grid-cols-2">
@@ -341,6 +390,19 @@ export default function AnalyticsPage() {
                     <Area yAxisId="right" type="monotone" dataKey="fees" stroke="#f59e0b" fill="url(#analyticsFees)" />
                   </AreaChart>
                 </ResponsiveContainer>
+              ) : poolSnapshot.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={poolSnapshot} margin={{ top: 8, right: 8, left: 0, bottom: 36 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.35} />
+                    <XAxis dataKey="label" angle={-16} textAnchor="end" height={42} stroke="#cbd5e1" tick={{ fontSize: 10 }} />
+                    <YAxis stroke="#34d399" tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                      formatter={(value) => [n(value).toFixed(6), 'pool_liquidity']}
+                    />
+                    <Bar dataKey="liquidity" fill="#34d399" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-slate-300">No volume/fee bars yet.</div>
               )}
@@ -361,6 +423,21 @@ export default function AnalyticsPage() {
                     <Line yAxisId="left" dataKey="gas" name="avg_gas_usd" stroke="#38bdf8" dot={false} strokeWidth={2} />
                     <Line yAxisId="right" dataKey="slippage" name="slippage_bps" stroke="#fb7185" dot={false} strokeWidth={2} />
                   </LineChart>
+                </ResponsiveContainer>
+              ) : poolSnapshot.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={poolSnapshot} margin={{ top: 8, right: 8, left: 0, bottom: 36 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.35} />
+                    <XAxis dataKey="label" angle={-16} textAnchor="end" height={42} stroke="#cbd5e1" tick={{ fontSize: 10 }} />
+                    <YAxis yAxisId="left" stroke="#38bdf8" tick={{ fontSize: 11 }} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                      formatter={(value, name) => [n(value).toFixed(6), String(name)]}
+                    />
+                    <Bar yAxisId="left" dataKey="swaps" fill="#38bdf8" radius={[6, 6, 0, 0]} />
+                    <Bar yAxisId="right" dataKey="feeUsd" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                  </BarChart>
                 </ResponsiveContainer>
               ) : (
                 <div className="flex h-full items-center justify-center text-sm text-slate-300">No gas/slippage bars yet.</div>

@@ -117,6 +117,11 @@ type PairChartPoint = {
   fees: number;
 };
 
+type PoolLiquidityPoint = {
+  symbol: string;
+  liquidity: number;
+};
+
 type LimitOrderDraft = {
   id: string;
   chain_id: number;
@@ -188,6 +193,37 @@ function resolveSwapGasLimit(chainId: number, estimatedGas: bigint, chainGasCap:
   return gas;
 }
 
+function buildPoolGraph(pools: PairRow[]): Map<string, Set<string>> {
+  const graph = new Map<string, Set<string>>();
+  for (const pool of pools) {
+    const a = String(pool.token0_symbol || '').toUpperCase();
+    const b = String(pool.token1_symbol || '').toUpperCase();
+    if (!a || !b) continue;
+    if (!graph.has(a)) graph.set(a, new Set<string>());
+    if (!graph.has(b)) graph.set(b, new Set<string>());
+    graph.get(a)!.add(b);
+    graph.get(b)!.add(a);
+  }
+  return graph;
+}
+
+function reachableSymbols(graph: Map<string, Set<string>>, start: string): Set<string> {
+  const startUpper = start.toUpperCase();
+  const seen = new Set<string>();
+  const queue: string[] = [startUpper];
+  while (queue.length) {
+    const current = queue.shift()!;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    const neighbors = graph.get(current);
+    if (!neighbors) continue;
+    for (const next of neighbors) {
+      if (!seen.has(next)) queue.push(next);
+    }
+  }
+  return seen;
+}
+
 export default function ExchangePage() {
   const [mode, setMode] = useState<'market' | 'limit' | 'transfer'>('market');
   const [chainId, setChainId] = useState<number>(DEFAULT_CHAIN_ID);
@@ -246,20 +282,6 @@ export default function ExchangePage() {
     () => tokenMap.get(wrappedNativeSymbol.toUpperCase()) || null,
     [tokenMap, wrappedNativeSymbol]
   );
-  const filteredTokenInOptions = useMemo(() => {
-    const query = tokenInQuery.trim().toUpperCase();
-    if (!query) return chainTokens;
-    return chainTokens.filter((token) => {
-      return token.symbol.toUpperCase().includes(query) || token.name.toUpperCase().includes(query);
-    });
-  }, [chainTokens, tokenInQuery]);
-  const filteredTokenOutOptions = useMemo(() => {
-    const query = tokenOutQuery.trim().toUpperCase();
-    if (!query) return chainTokens;
-    return chainTokens.filter((token) => {
-      return token.symbol.toUpperCase().includes(query) || token.name.toUpperCase().includes(query);
-    });
-  }, [chainTokens, tokenOutQuery]);
   const selectedNetwork = useMemo(
     () => networks.find((network) => network.chain_id === chainId),
     [networks, chainId]
@@ -282,6 +304,39 @@ export default function ExchangePage() {
       pools: filtered
     };
   }, [pairs, chainId]);
+  const poolGraph = useMemo(() => buildPoolGraph(pairSummary.pools), [pairSummary.pools]);
+  const tradableSymbolSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const symbol of poolGraph.keys()) set.add(symbol);
+    return set;
+  }, [poolGraph]);
+  const reachableOutSet = useMemo(
+    () => reachableSymbols(poolGraph, tokenIn),
+    [poolGraph, tokenIn]
+  );
+  const filteredTokenInOptions = useMemo(() => {
+    const query = tokenInQuery.trim().toUpperCase();
+    const base = !query
+      ? chainTokens
+      : chainTokens.filter((token) => {
+          return token.symbol.toUpperCase().includes(query) || token.name.toUpperCase().includes(query);
+        });
+    if (!tradableSymbolSet.size) return base;
+    return base.filter((token) => tradableSymbolSet.has(token.symbol.toUpperCase()));
+  }, [chainTokens, tokenInQuery, tradableSymbolSet]);
+  const filteredTokenOutOptions = useMemo(() => {
+    const query = tokenOutQuery.trim().toUpperCase();
+    const base = !query
+      ? chainTokens
+      : chainTokens.filter((token) => {
+          return token.symbol.toUpperCase().includes(query) || token.name.toUpperCase().includes(query);
+        });
+    if (!reachableOutSet.size) return base;
+    return base.filter((token) => {
+      const upper = token.symbol.toUpperCase();
+      return reachableOutSet.has(upper) && upper !== tokenIn.toUpperCase();
+    });
+  }, [chainTokens, tokenOutQuery, reachableOutSet, tokenIn]);
   const pairChartData = useMemo<PairChartPoint[]>(() => {
     return pairSummary.pools.slice(0, 10).map((pair) => ({
       label: `${pair.token0_symbol}/${pair.token1_symbol}`,
@@ -289,6 +344,16 @@ export default function ExchangePage() {
       fees: n(pair.total_fee_usd)
     }));
   }, [pairSummary.pools]);
+  const liquiditySnapshot = useMemo<PoolLiquidityPoint[]>(() => {
+    return chainTokens
+      .map((token) => ({
+        symbol: token.symbol,
+        liquidity: n(walletBalances[token.symbol] || '0')
+      }))
+      .filter((item) => item.liquidity > 0)
+      .sort((a, b) => b.liquidity - a.liquidity)
+      .slice(0, 8);
+  }, [chainTokens, walletBalances]);
 
   useEffect(() => {
     let active = true;
@@ -313,18 +378,35 @@ export default function ExchangePage() {
 
   useEffect(() => {
     if (!chainTokens.length) return;
-    if (!chainTokens.some((token) => token.symbol === tokenIn)) {
-      const fallback = chainTokens.find((token) => token.symbol.toUpperCase() !== 'MUSD') || chainTokens[0];
+    if (!chainTokens.some((token) => token.symbol === tokenIn) || (tradableSymbolSet.size && !tradableSymbolSet.has(tokenIn.toUpperCase()))) {
+      const fallback =
+        chainTokens.find((token) => tradableSymbolSet.has(token.symbol.toUpperCase()) && token.symbol.toUpperCase() !== 'MUSD') ||
+        chainTokens.find((token) => tradableSymbolSet.has(token.symbol.toUpperCase())) ||
+        chainTokens.find((token) => token.symbol.toUpperCase() !== 'MUSD') ||
+        chainTokens[0];
       if (fallback) setTokenIn(fallback.symbol);
     }
-    if (!chainTokens.some((token) => token.symbol === tokenOut)) {
-      const fallback = chainTokens.find((token) => token.symbol.toUpperCase() === 'MUSD') || chainTokens[0];
+
+    const outReachable =
+      reachableOutSet.size === 0 ||
+      (reachableOutSet.has(tokenOut.toUpperCase()) && tokenOut.toUpperCase() !== tokenIn.toUpperCase());
+    if (!chainTokens.some((token) => token.symbol === tokenOut) || !outReachable) {
+      const fallback =
+        chainTokens.find((token) => {
+          const upper = token.symbol.toUpperCase();
+          return upper === 'MUSD' && upper !== tokenIn.toUpperCase() && (reachableOutSet.size === 0 || reachableOutSet.has(upper));
+        }) ||
+        chainTokens.find((token) => {
+          const upper = token.symbol.toUpperCase();
+          return upper !== tokenIn.toUpperCase() && (reachableOutSet.size === 0 || reachableOutSet.has(upper));
+        }) ||
+        chainTokens[0];
       if (fallback) setTokenOut(fallback.symbol);
     }
     if (!chainTokens.some((token) => token.symbol === transferToken)) {
       setTransferToken(chainTokens[0].symbol);
     }
-  }, [chainTokens, tokenIn, tokenOut, transferToken]);
+  }, [chainTokens, tokenIn, tokenOut, transferToken, tradableSymbolSet, reachableOutSet]);
 
   useEffect(() => {
     let active = true;
@@ -487,7 +569,13 @@ export default function ExchangePage() {
       }
       setQuote(body as QuoteResponse);
     } catch (error) {
-      setMarketError(error instanceof Error ? error.message : 'quote request failed');
+      const message = error instanceof Error ? error.message : 'quote request failed';
+      if (message.includes('no on-chain liquidity route') && pairSummary.pools.length) {
+        const available = pairSummary.pools.map((pool) => `${pool.token0_symbol}/${pool.token1_symbol}`).join(', ');
+        setMarketError(`${message}. Available pools on chain ${chainId}: ${available}`);
+      } else {
+        setMarketError(message);
+      }
     } finally {
       setQuoteLoading(false);
     }
@@ -1127,6 +1215,22 @@ export default function ExchangePage() {
             <div className="mt-2 rounded-lg border border-cyan-300/35 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
               ERC20 balances are empty. Use <a href="/harmony" className="underline">Harmony funding tools</a> to wrap
               native {chainId === 97 ? 'tBNB' : 'gas token'}, mint test collateral, and mint mUSD.
+            </div>
+          ) : null}
+          {liquiditySnapshot.length ? (
+            <div className="mt-3 h-36 rounded-lg border border-slateblue/55 bg-slate-900/50 p-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={liquiditySnapshot} margin={{ top: 6, right: 6, left: 0, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.35} />
+                  <XAxis dataKey="symbol" stroke="#cbd5e1" tick={{ fontSize: 10 }} />
+                  <YAxis stroke="#34d399" tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                    formatter={(value) => [n(value).toFixed(6), 'wallet_balance']}
+                  />
+                  <Bar dataKey="liquidity" fill="#34d399" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           ) : null}
         </section>
