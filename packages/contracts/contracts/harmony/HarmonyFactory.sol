@@ -9,22 +9,31 @@ import {HarmonyPair} from './HarmonyPair.sol';
 
 contract HarmonyFactory is Ownable2Step, Pausable {
     uint16 public constant MAX_SWAP_FEE_BPS = 1_000;
+    uint16 public constant MAX_PROTOCOL_FEE_BPS = 30;
 
     mapping(address => mapping(address => address)) public getPair;
     address[] public allPairs;
 
     uint16 public swapFeeBps;
+    uint16 public protocolFeeBps;
+    address public treasury;
 
     event PairCreated(address indexed token0, address indexed token1, address pair, uint256 pairIndex);
     event SwapFeeUpdated(uint16 previousFeeBps, uint16 newFeeBps);
+    event ProtocolFeeUpdated(uint16 previousProtocolFeeBps, uint16 newProtocolFeeBps);
+    event FeeUpdated(uint16 previousSwapFeeBps, uint16 newSwapFeeBps, uint16 previousProtocolFeeBps, uint16 newProtocolFeeBps);
+    event TreasuryAddressUpdated(address indexed previousTreasury, address indexed newTreasury);
 
     error IdenticalAddresses();
     error ZeroAddress();
     error PairAlreadyExists();
     error InvalidFee();
+    error InvalidProtocolFee();
+    error InvalidTreasury();
 
     constructor(address initialOwner) Ownable(initialOwner) {
         swapFeeBps = 30;
+        protocolFeeBps = 5;
     }
 
     function allPairsLength() external view returns (uint256) {
@@ -52,10 +61,38 @@ contract HarmonyFactory is Ownable2Step, Pausable {
     }
 
     function setSwapFeeBps(uint16 newSwapFeeBps) external onlyOwner {
-        if (newSwapFeeBps > MAX_SWAP_FEE_BPS) revert InvalidFee();
+        if (newSwapFeeBps > MAX_SWAP_FEE_BPS || newSwapFeeBps < protocolFeeBps) revert InvalidFee();
         uint16 previous = swapFeeBps;
         swapFeeBps = newSwapFeeBps;
         emit SwapFeeUpdated(previous, newSwapFeeBps);
+    }
+
+    function setProtocolFeeBps(uint16 newProtocolFeeBps) external onlyOwner {
+        if (newProtocolFeeBps > MAX_PROTOCOL_FEE_BPS || newProtocolFeeBps > swapFeeBps) revert InvalidProtocolFee();
+        uint16 previous = protocolFeeBps;
+        protocolFeeBps = newProtocolFeeBps;
+        emit ProtocolFeeUpdated(previous, newProtocolFeeBps);
+    }
+
+    function setFeeParams(uint16 newSwapFeeBps, uint16 newProtocolFeeBps) external onlyOwner {
+        if (newSwapFeeBps > MAX_SWAP_FEE_BPS) revert InvalidFee();
+        if (newProtocolFeeBps > MAX_PROTOCOL_FEE_BPS || newProtocolFeeBps > newSwapFeeBps) {
+            revert InvalidProtocolFee();
+        }
+        uint16 previousSwap = swapFeeBps;
+        uint16 previousProtocol = protocolFeeBps;
+        swapFeeBps = newSwapFeeBps;
+        protocolFeeBps = newProtocolFeeBps;
+        emit FeeUpdated(previousSwap, newSwapFeeBps, previousProtocol, newProtocolFeeBps);
+        emit SwapFeeUpdated(previousSwap, newSwapFeeBps);
+        emit ProtocolFeeUpdated(previousProtocol, newProtocolFeeBps);
+    }
+
+    function setTreasury(address newTreasury) external onlyOwner {
+        if (newTreasury == address(0)) revert InvalidTreasury();
+        address previous = treasury;
+        treasury = newTreasury;
+        emit TreasuryAddressUpdated(previous, newTreasury);
     }
 
     function pause() external onlyOwner {

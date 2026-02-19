@@ -8,5 +8,9 @@ interface IHarmonyFactory {
 
     function swapFeeBps() external view returns (uint16);
 
+    function protocolFeeBps() external view returns (uint16);
+
+    function treasury() external view returns (address);
+
     function paused() external view returns (bool);
 }

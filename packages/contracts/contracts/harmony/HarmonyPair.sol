@@ -33,6 +33,7 @@ contract HarmonyPair is ERC20, ERC20Permit {
         address indexed to
     );
     event Sync(uint112 reserve0, uint112 reserve1);
+    event ProtocolFeeAccrued(address indexed treasury, address indexed token, uint256 amount, address indexed pair);
 
     error Forbidden();
     error InsufficientLiquidityMinted();
@@ -133,21 +134,48 @@ contract HarmonyPair is ERC20, ERC20Permit {
         if (amount0Out > 0) _safeTransfer(_token0, to, amount0Out);
         if (amount1Out > 0) _safeTransfer(_token1, to, amount1Out);
 
-        uint256 balance0 = IERC20(_token0).balanceOf(address(this));
-        uint256 balance1 = IERC20(_token1).balanceOf(address(this));
+        uint256 balance0BeforeProtocolFee = IERC20(_token0).balanceOf(address(this));
+        uint256 balance1BeforeProtocolFee = IERC20(_token1).balanceOf(address(this));
 
-        uint256 amount0In = balance0 > (_reserve0 - amount0Out)
-            ? balance0 - (_reserve0 - amount0Out)
+        uint256 amount0In = balance0BeforeProtocolFee > (_reserve0 - amount0Out)
+            ? balance0BeforeProtocolFee - (_reserve0 - amount0Out)
             : 0;
-        uint256 amount1In = balance1 > (_reserve1 - amount1Out)
-            ? balance1 - (_reserve1 - amount1Out)
+        uint256 amount1In = balance1BeforeProtocolFee > (_reserve1 - amount1Out)
+            ? balance1BeforeProtocolFee - (_reserve1 - amount1Out)
             : 0;
 
         if (amount0In == 0 && amount1In == 0) revert InsufficientInputAmount();
 
-        uint256 feeBps = IHarmonyFactory(factory).swapFeeBps();
-        uint256 balance0Adjusted = (balance0 * BPS) - (amount0In * feeBps);
-        uint256 balance1Adjusted = (balance1 * BPS) - (amount1In * feeBps);
+        uint256 protocolFeeBps = IHarmonyFactory(factory).protocolFeeBps();
+        address treasuryAddress = IHarmonyFactory(factory).treasury();
+
+        if (treasuryAddress != address(0) && protocolFeeBps > 0) {
+            if (amount0In > 0) {
+                uint256 protocolFee0 = (amount0In * protocolFeeBps) / BPS;
+                if (protocolFee0 > 0) {
+                    _safeTransfer(_token0, treasuryAddress, protocolFee0);
+                    emit ProtocolFeeAccrued(treasuryAddress, _token0, protocolFee0, address(this));
+                    _notifyTreasury(treasuryAddress, _token0, protocolFee0);
+                }
+            }
+
+            if (amount1In > 0) {
+                uint256 protocolFee1 = (amount1In * protocolFeeBps) / BPS;
+                if (protocolFee1 > 0) {
+                    _safeTransfer(_token1, treasuryAddress, protocolFee1);
+                    emit ProtocolFeeAccrued(treasuryAddress, _token1, protocolFee1, address(this));
+                    _notifyTreasury(treasuryAddress, _token1, protocolFee1);
+                }
+            }
+        }
+
+        uint256 balance0 = IERC20(_token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(_token1).balanceOf(address(this));
+
+        uint256 swapFeeBps = IHarmonyFactory(factory).swapFeeBps();
+        uint256 lpFeeBps = swapFeeBps > protocolFeeBps ? swapFeeBps - protocolFeeBps : 0;
+        uint256 balance0Adjusted = (balance0 * BPS) - (amount0In * lpFeeBps);
+        uint256 balance1Adjusted = (balance1 * BPS) - (amount1In * lpFeeBps);
         if (balance0Adjusted * balance1Adjusted < uint256(_reserve0) * uint256(_reserve1) * (BPS ** 2)) {
             revert InsufficientLiquidity();
         }
@@ -185,6 +213,13 @@ contract HarmonyPair is ERC20, ERC20Permit {
 
     function _requireFactoryActive() private view {
         if (IHarmonyFactory(factory).paused()) revert EnginePaused();
+    }
+
+    function _notifyTreasury(address treasuryAddress, address token, uint256 amount) private {
+        (bool success, ) = treasuryAddress.call(
+            abi.encodeWithSignature('onProtocolFeeReceived(address,uint256,address)', token, amount, address(this))
+        );
+        success;
     }
 
     function _min(uint256 x, uint256 y) private pure returns (uint256 z) {

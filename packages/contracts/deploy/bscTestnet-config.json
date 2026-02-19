@@ -6,13 +6,13 @@
   "collaterals": [
     {
       "symbol": "USDC",
-      "token": "",
+      "token": "0x64544969ed7EBf5f083679233325356EbE738930",
       "minOraclePriceE18": "980000000000000000",
       "maxOraclePriceE18": "1020000000000000000"
     },
     {
       "symbol": "USDT",
-      "token": "",
+      "token": "0x66E972502A34A625828C544a1914E8D8cc2A9dE5",
       "minOraclePriceE18": "980000000000000000",
       "maxOraclePriceE18": "1020000000000000000"
     }

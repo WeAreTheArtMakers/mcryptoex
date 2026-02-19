@@ -186,4 +186,89 @@ describe('Harmony Engine (Factory/Pair/Router)', function () {
         )
     ).to.be.revertedWithCustomError(router, 'InvalidPathLength');
   });
+
+  it('enforces fee governance caps and treasury controls', async function () {
+    const { admin, factory } = await deployFixture();
+
+    await expect(factory.connect(admin).setTreasury(ethers.ZeroAddress)).to.be.revertedWithCustomError(
+      factory,
+      'InvalidTreasury'
+    );
+
+    await expect(factory.connect(admin).setFeeParams(30, 5))
+      .to.emit(factory, 'FeeUpdated')
+      .withArgs(30, 30, 5, 5);
+
+    await expect(factory.connect(admin).setFeeParams(1_001, 5)).to.be.revertedWithCustomError(factory, 'InvalidFee');
+    await expect(factory.connect(admin).setProtocolFeeBps(31)).to.be.revertedWithCustomError(
+      factory,
+      'InvalidProtocolFee'
+    );
+    await expect(factory.connect(admin).setFeeParams(20, 25)).to.be.revertedWithCustomError(
+      factory,
+      'InvalidProtocolFee'
+    );
+  });
+
+  it('accrues protocol fee to treasury during swaps', async function () {
+    const { admin, lp, trader, tokenA, tokenB, factory, router } = await deployFixture();
+
+    await (await factory.connect(admin).setTreasury(admin.address)).wait();
+    await (await factory.connect(admin).setFeeParams(30, 5)).wait();
+
+    const deadline = BigInt((await ethers.provider.getBlock('latest'))!.timestamp + 3600);
+
+    await (await tokenA.connect(lp).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+    await (await tokenB.connect(lp).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+
+    await (
+      await router
+        .connect(lp)
+        .addLiquidity(
+          await tokenA.getAddress(),
+          await tokenB.getAddress(),
+          ethers.parseEther('1000'),
+          ethers.parseEther('1000'),
+          0,
+          0,
+          lp.address,
+          deadline
+        )
+    ).wait();
+
+    const pairAddress = await factory.getPair(await tokenA.getAddress(), await tokenB.getAddress());
+    const pair = await ethers.getContractAt('HarmonyPair', pairAddress);
+
+    await (await tokenA.connect(trader).approve(await router.getAddress(), ethers.MaxUint256)).wait();
+
+    const treasuryBefore = await tokenA.balanceOf(admin.address);
+    const swapTx = await router
+      .connect(trader)
+      .swapExactTokensForTokens(
+        ethers.parseEther('10'),
+        0,
+        [await tokenA.getAddress(), await tokenB.getAddress()],
+        trader.address,
+        deadline
+      );
+    const receipt = await swapTx.wait();
+    const treasuryAfter = await tokenA.balanceOf(admin.address);
+
+    const protocolFeeEvent = receipt?.logs
+      .map((log) => {
+        try {
+          return pair.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((event) => event?.name === 'ProtocolFeeAccrued');
+
+    expect(protocolFeeEvent).to.not.equal(undefined);
+    expect(protocolFeeEvent).to.not.equal(null);
+
+    const protocolFeeAmount = BigInt(protocolFeeEvent?.args?.amount?.toString() || '0');
+    expect(protocolFeeAmount).to.be.greaterThan(0n);
+    expect(treasuryAfter - treasuryBefore).to.equal(protocolFeeAmount);
+  });
 });

@@ -9,6 +9,7 @@ type AddressRegistry = {
     stabilizer: string;
     harmonyFactory: string;
     harmonyRouter: string;
+    resonanceVault?: string;
   };
 };
 
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
   const stabilizer = await ethers.getContractAt('Stabilizer', registry.contracts.stabilizer);
   const factory = await ethers.getContractAt('HarmonyFactory', registry.contracts.harmonyFactory);
   const router = await ethers.getContractAt('HarmonyRouter', registry.contracts.harmonyRouter);
+  const resonanceVaultAddress = registry.contracts.resonanceVault || '';
 
   const defaultAdminRole = await musd.DEFAULT_ADMIN_ROLE();
   const minterRole = await musd.MINTER_ROLE();
@@ -67,6 +69,10 @@ async function main(): Promise<void> {
 
   await (await factory.transferOwnership(newAdmin)).wait();
   await (await router.transferOwnership(newAdmin)).wait();
+  if (resonanceVaultAddress && ethers.isAddress(resonanceVaultAddress)) {
+    const resonanceVault = await ethers.getContractAt('ResonanceVault', resonanceVaultAddress);
+    await (await resonanceVault.transferOwnership(newAdmin)).wait();
+  }
 
   if (revokeDeployer) {
     if (await musd.hasRole(defaultAdminRole, operator.address)) {
@@ -102,7 +108,7 @@ async function main(): Promise<void> {
       2
     )
   );
-  console.log('Reminder: new admin must call acceptOwnership() on HarmonyFactory and HarmonyRouter.');
+  console.log('Reminder: new admin must call acceptOwnership() on HarmonyFactory, HarmonyRouter, and ResonanceVault (if deployed).');
 }
 
 main().catch((error) => {

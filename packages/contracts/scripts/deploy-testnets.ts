@@ -19,7 +19,26 @@ type DeployConfig = {
   collateralMinPriceE18?: string;
   collateralMaxPriceE18?: string;
   collaterals?: CollateralInput[];
+  swapFeeBps?: number;
+  protocolFeeBps?: number;
 };
+
+const DEFAULT_SWAP_FEE_BPS = 30;
+const DEFAULT_PROTOCOL_FEE_BPS = 5;
+
+function parseFeeBps(
+  envName: string,
+  configValue: number | undefined,
+  fallback: number
+): number {
+  const envRaw = envForChain(envName);
+  const raw = envRaw && envRaw.trim().length > 0 ? envRaw.trim() : configValue?.toString() || `${fallback}`;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`invalid ${envName}=${raw}; expected integer bps`);
+  }
+  return parsed;
+}
 
 function readConfig(networkName: string): DeployConfig {
   const path = join(__dirname, '..', 'deploy', `${networkName}-config.json`);
@@ -35,6 +54,11 @@ function parseCsv(value: string | undefined): string[] {
     .split(',')
     .map((x) => x.trim())
     .filter((x) => x.length > 0);
+}
+
+function envForChain(name: string): string | undefined {
+  const suffix = network.name.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+  return process.env[`${name}_${suffix}`] || process.env[name];
 }
 
 function stableBoundsE18(deviationBps: bigint): { min: string; max: string } {
@@ -74,8 +98,8 @@ function dedupeCollaterals(inputs: CollateralInput[]): CollateralInput[] {
 }
 
 function resolveCollaterals(config: DeployConfig): CollateralInput[] {
-  const envSingleCollateral = sanitizeAddress(process.env.COLLATERAL_TOKEN);
-  const envCollateralList = parseCsv(process.env.COLLATERAL_TOKENS).map((token) => ({
+  const envSingleCollateral = sanitizeAddress(envForChain('COLLATERAL_TOKEN'));
+  const envCollateralList = parseCsv(envForChain('COLLATERAL_TOKENS')).map((token) => ({
     token
   }));
 
@@ -85,11 +109,11 @@ function resolveCollaterals(config: DeployConfig): CollateralInput[] {
   const stableBounds = stableBoundsE18(stableDeviationBps);
   const stableEnvTokens = [
     {
-      token: sanitizeAddress(process.env.USDC_TOKEN_ADDRESS),
+      token: sanitizeAddress(envForChain('USDC_TOKEN_ADDRESS')),
       symbol: 'USDC'
     },
     {
-      token: sanitizeAddress(process.env.USDT_TOKEN_ADDRESS),
+      token: sanitizeAddress(envForChain('USDT_TOKEN_ADDRESS')),
       symbol: 'USDT'
     }
   ]
@@ -108,8 +132,8 @@ function resolveCollaterals(config: DeployConfig): CollateralInput[] {
   if (envSingleCollateral) {
     inputs.push({
       token: envSingleCollateral,
-      minOraclePriceE18: process.env.COLLATERAL_MIN_PRICE_E18 || config.collateralMinPriceE18,
-      maxOraclePriceE18: process.env.COLLATERAL_MAX_PRICE_E18 || config.collateralMaxPriceE18
+      minOraclePriceE18: envForChain('COLLATERAL_MIN_PRICE_E18') || config.collateralMinPriceE18,
+      maxOraclePriceE18: envForChain('COLLATERAL_MAX_PRICE_E18') || config.collateralMaxPriceE18
     });
   }
   if (envCollateralList.length > 0) {
@@ -151,7 +175,7 @@ async function main(): Promise<void> {
   const config = readConfig(network.name);
   const collaterals = resolveCollaterals(config);
 
-  let oracleAddress = process.env.ORACLE_ADDRESS || config.oracleAddress;
+  let oracleAddress = envForChain('ORACLE_ADDRESS') || config.oracleAddress;
   if (!oracleAddress || oracleAddress === ethers.ZeroAddress) {
     const MockPriceOracle = await ethers.getContractFactory('MockPriceOracle');
     const oracle = await MockPriceOracle.deploy(deployer.address);
@@ -177,6 +201,31 @@ async function main(): Promise<void> {
   const HarmonyRouter = await ethers.getContractFactory('HarmonyRouter');
   const router = await HarmonyRouter.deploy(await factory.getAddress());
   await router.waitForDeployment();
+
+  const swapFeeBps = parseFeeBps('SWAP_FEE_BPS', config.swapFeeBps, DEFAULT_SWAP_FEE_BPS);
+  const protocolFeeBps = parseFeeBps('PROTOCOL_FEE_BPS', config.protocolFeeBps, DEFAULT_PROTOCOL_FEE_BPS);
+
+  if (swapFeeBps > 1_000) {
+    throw new Error(`SWAP_FEE_BPS exceeds cap (1000): ${swapFeeBps}`);
+  }
+  if (protocolFeeBps > 30) {
+    throw new Error(`PROTOCOL_FEE_BPS exceeds cap (30): ${protocolFeeBps}`);
+  }
+  if (protocolFeeBps > swapFeeBps) {
+    throw new Error(`PROTOCOL_FEE_BPS must be <= SWAP_FEE_BPS (${protocolFeeBps} > ${swapFeeBps})`);
+  }
+
+  await (await factory.setFeeParams(swapFeeBps, protocolFeeBps)).wait();
+
+  const ResonanceVault = await ethers.getContractFactory('ResonanceVault');
+  const resonanceVault = await ResonanceVault.deploy(
+    await router.getAddress(),
+    await musd.getAddress(),
+    await factory.getAddress(),
+    deployer.address
+  );
+  await resonanceVault.waitForDeployment();
+  await (await factory.setTreasury(await resonanceVault.getAddress())).wait();
 
   const configuredCollaterals: Array<{
     token: string;
@@ -206,7 +255,24 @@ async function main(): Promise<void> {
       minOraclePriceE18: collateral.minOraclePriceE18!,
       maxOraclePriceE18: collateral.maxOraclePriceE18!
     });
+
+    await (await resonanceVault.setTokenAllowlist(collateral.token, true)).wait();
   }
+
+  const opsBudgetAddress = sanitizeAddress(envForChain('OPS_BUDGET_ADDRESS')) || deployer.address;
+  const liquidityIncentivesAddress = sanitizeAddress(envForChain('LIQUIDITY_INCENTIVES_ADDRESS')) || deployer.address;
+  const reserveOrBuybackAddress = sanitizeAddress(envForChain('RESERVE_OR_BUYBACK_ADDRESS')) || deployer.address;
+
+  await (
+    await resonanceVault.setDistributionConfig(
+      opsBudgetAddress,
+      liquidityIncentivesAddress,
+      reserveOrBuybackAddress,
+      4_000,
+      4_000,
+      2_000
+    )
+  ).wait();
 
   const registry = {
     network: network.name,
@@ -218,7 +284,17 @@ async function main(): Promise<void> {
       stabilizer: await stabilizer.getAddress(),
       oracle: oracleAddress,
       harmonyFactory: await factory.getAddress(),
-      harmonyRouter: await router.getAddress()
+      harmonyRouter: await router.getAddress(),
+      resonanceVault: await resonanceVault.getAddress()
+    },
+    fees: {
+      swapFeeBps,
+      protocolFeeBps
+    },
+    treasury: {
+      opsBudgetAddress,
+      liquidityIncentivesAddress,
+      reserveOrBuybackAddress
     },
     collaterals: configuredCollaterals,
     collateralToken: configuredCollaterals.length > 0 ? configuredCollaterals[0].token : null
