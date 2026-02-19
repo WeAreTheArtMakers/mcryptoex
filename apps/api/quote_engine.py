@@ -31,6 +31,7 @@ class ChainLiquidityState:
     canonical_symbols: dict[str, str]
     pairs: list[PairState]
     swap_fee_bps: int
+    protocol_fee_bps: int
 
 
 class LiquidityDepthCache:
@@ -74,12 +75,21 @@ class LiquidityDepthCache:
                     canonical[upper] = symbol
 
             swap_fee_bps = 30
+            protocol_fee_bps = 5
             amm_cfg = chain.get('amm', {})
             if isinstance(amm_cfg, dict):
                 try:
                     swap_fee_bps = int(amm_cfg.get('swap_fee_bps', 30))
                 except (TypeError, ValueError):
                     swap_fee_bps = 30
+                try:
+                    protocol_fee_bps = int(amm_cfg.get('protocol_fee_bps', 5))
+                except (TypeError, ValueError):
+                    protocol_fee_bps = 5
+            if protocol_fee_bps < 0:
+                protocol_fee_bps = 0
+            if protocol_fee_bps > swap_fee_bps:
+                protocol_fee_bps = swap_fee_bps
 
             parsed_pairs: list[PairState] = []
             pairs = chain.get('pairs', [])
@@ -117,7 +127,8 @@ class LiquidityDepthCache:
                 symbols=symbols,
                 canonical_symbols=canonical,
                 pairs=parsed_pairs,
-                swap_fee_bps=swap_fee_bps
+                swap_fee_bps=swap_fee_bps,
+                protocol_fee_bps=protocol_fee_bps
             )
 
         self._chains = chains
@@ -271,6 +282,8 @@ def build_quote(
             route = [canonical_in, musd_symbol, canonical_out]
 
     min_out = expected_out * (Decimal(10_000 - slippage_bps) / Decimal(10_000))
+    protocol_fee_amount_in = amount_in * Decimal(state.protocol_fee_bps) / Decimal(10_000)
+    lp_fee_bps = max(0, state.swap_fee_bps - state.protocol_fee_bps)
 
     return {
         'chain_id': chain_id,
@@ -283,5 +296,9 @@ def build_quote(
         'route': route,
         'route_depth': str(route_depth),
         'liquidity_source': liquidity_source,
+        'total_fee_bps': state.swap_fee_bps,
+        'protocol_fee_bps': state.protocol_fee_bps,
+        'lp_fee_bps': lp_fee_bps,
+        'protocol_fee_amount_in': str(protocol_fee_amount_in),
         'engine': 'harmony-engine-v2'
     }

@@ -40,6 +40,9 @@ type NetworkItem = {
   factory_address?: string;
   musd_address?: string;
   stabilizer_address?: string;
+  vault_address?: string;
+  swap_fee_bps?: number;
+  protocol_fee_bps?: number;
   rpc_connected?: boolean;
   latest_checked_block?: number | null;
 };
@@ -62,6 +65,10 @@ type QuoteResponse = {
   route: string[];
   route_depth?: string;
   liquidity_source?: string;
+  total_fee_bps?: number;
+  protocol_fee_bps?: number;
+  lp_fee_bps?: number;
+  protocol_fee_amount_in?: string;
   engine: string;
 };
 
@@ -566,6 +573,15 @@ export default function HarmonyPage() {
               {(quote.liquidity_source || 'n/a')}{quote.route_depth ? ` (depth ${quote.route_depth})` : ''}
             </p>
             <p>
+              <span className="font-semibold text-mint">Fee split:</span>{' '}
+              {quote.total_fee_bps ?? 30} bps total / {quote.lp_fee_bps ?? 25} bps LP / {quote.protocol_fee_bps ?? 5}{' '}
+              bps protocol
+            </p>
+            <p>
+              <span className="font-semibold text-mint">Estimated protocol cut:</span>{' '}
+              {quote.protocol_fee_amount_in || '0'} {quote.token_in}
+            </p>
+            <p>
               <span className="font-semibold text-mint">Engine:</span> {quote.engine}
             </p>
           </div>
@@ -628,6 +644,12 @@ export default function HarmonyPage() {
             <p className="mt-2 text-xs text-amber-50/80">
               Registry health: {selectedNetwork.rpc_connected ? 'rpc-connected' : 'rpc-disconnected'} / block{' '}
               {selectedNetwork.latest_checked_block ?? 'n/a'}
+            </p>
+          ) : null}
+          {selectedNetwork ? (
+            <p className="mt-1 text-xs text-amber-50/80">
+              Pool fee model: {selectedNetwork.swap_fee_bps ?? 30} bps total /{' '}
+              {selectedNetwork.protocol_fee_bps ?? 5} bps protocol
             </p>
           ) : null}
           {riskError ? <p className="mt-2 text-xs text-rose-200">{riskError}</p> : null}
