@@ -9,6 +9,10 @@ import { injected, walletConnect } from 'wagmi/connectors';
 
 const localChainEnabled = process.env.NEXT_PUBLIC_ENABLE_LOCAL_CHAIN === 'true';
 
+const localRpcUrlRaw = process.env.NEXT_PUBLIC_LOCAL_RPC_URL || 'http://127.0.0.1:8545';
+const localRpcUrl =
+  typeof window === 'undefined' ? localRpcUrlRaw : localRpcUrlRaw.replace('host.docker.internal', '127.0.0.1');
+
 const hardhatLocal = defineChain({
   id: 31337,
   name: 'Hardhat Local',
@@ -20,7 +24,7 @@ const hardhatLocal = defineChain({
   },
   rpcUrls: {
     default: {
-      http: [process.env.NEXT_PUBLIC_LOCAL_RPC_URL || 'http://127.0.0.1:8545']
+      http: [localRpcUrl]
     }
   }
 });
@@ -45,14 +49,16 @@ if (walletConnectProjectId) {
 
 const chains = localChainEnabled ? ([hardhatLocal, sepolia, bscTestnet] as const) : ([sepolia, bscTestnet] as const);
 
+const transports = {
+  [hardhatLocal.id]: localChainEnabled ? http(localRpcUrl) : http(),
+  [sepolia.id]: http(),
+  [bscTestnet.id]: http()
+} as const;
+
 const config = createConfig({
   chains,
   connectors: connectors as never,
-  transports: {
-    [hardhatLocal.id]: http(process.env.NEXT_PUBLIC_LOCAL_RPC_URL || 'http://127.0.0.1:8545'),
-    [sepolia.id]: http(),
-    [bscTestnet.id]: http()
-  },
+  transports,
   ssr: true
 });
 

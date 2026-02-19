@@ -145,6 +145,8 @@ services:
       QUOTE_CACHE_TTL_SECONDS: ${QUOTE_CACHE_TTL_SECONDS:-20}
       QUOTE_ALLOW_STATIC_FALLBACK: ${QUOTE_ALLOW_STATIC_FALLBACK:-false}
       PYTHONUNBUFFERED: '1'
+    volumes:
+      - ./packages/sdk/data/chain-registry.generated.json:/app/packages/sdk/data/chain-registry.generated.json:ro
     ports:
       - '${API_PORT}:8000'
 
@@ -173,6 +175,8 @@ services:
       INDEXER_ENABLE_SIMULATION: ${INDEXER_HARDHAT_ENABLE_SIMULATION:-false}
       INDEXER_SIMULATION_INTERVAL_SECONDS: 25
       PYTHONUNBUFFERED: '1'
+    volumes:
+      - ./packages/sdk/data/chain-registry.generated.json:/app/packages/sdk/data/chain-registry.generated.json:ro
 
   indexer-ethereum:
     build:
@@ -199,6 +203,8 @@ services:
       INDEXER_ENABLE_SIMULATION: ${INDEXER_ETHEREUM_ENABLE_SIMULATION:-false}
       INDEXER_SIMULATION_INTERVAL_SECONDS: 25
       PYTHONUNBUFFERED: '1'
+    volumes:
+      - ./packages/sdk/data/chain-registry.generated.json:/app/packages/sdk/data/chain-registry.generated.json:ro
 
   indexer-bnb:
     build:
@@ -225,6 +231,8 @@ services:
       INDEXER_ENABLE_SIMULATION: ${INDEXER_BNB_ENABLE_SIMULATION:-false}
       INDEXER_SIMULATION_INTERVAL_SECONDS: 25
       PYTHONUNBUFFERED: '1'
+    volumes:
+      - ./packages/sdk/data/chain-registry.generated.json:/app/packages/sdk/data/chain-registry.generated.json:ro
 
   validator:
     build:
