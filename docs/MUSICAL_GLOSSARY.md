@@ -7,7 +7,7 @@ Date: 2026-02-18
 - `Notes`: protobuf event messages and contract event payloads
 - `Tempo`: streaming pipeline from chain/API events into Redpanda and ledger services
 - `Harmony Engine`: AMM matching and routing layer (`Factory`, `Pair`, `Router`)
-- `Resonance Vault`: protocol-owned liquidity and treasury routing module (future expansion)
+- `Resonance Vault`: protocol treasury module that receives swap protocol fees, converts to mUSD, and executes bucketed distribution
 - `Dissonance Guards`: risk controls (pause, rate limits, oracle bounds, circuit breakers)
 - `Orchestra UI`: user-facing web application
 - `Overture`: wallet-first landing view

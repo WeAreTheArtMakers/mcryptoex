@@ -1,6 +1,6 @@
 # THREAT MODEL
 
-Date: 2026-02-18
+Date: 2026-02-19
 
 ## 1) Scope
 
@@ -51,25 +51,32 @@ Out-of-scope (MVP):
   - minimum collateralization ratio requirement
   - emergency collateral threshold and breaker trip
 
-4. Governance key compromise
+4. Treasury conversion abuse / griefing
+- Mitigations:
+  - permissionless but bounded harvest flow (allowlist, max amount/call, slippage cap)
+  - pausability on `ResonanceVault`
+  - distribution recipient/bps controls with sum-to-10000 guard
+  - explicit conversion/distribution event trail for post-incident accounting
+
+5. Governance key compromise
 - Mitigations:
   - two-step ownership for factory/router
   - role-separated AccessControl for stabilizer/token
   - timelock/multisig handoff script (`handoff-admin.ts`)
 
-5. Event ingestion tampering / replay
+6. Event ingestion tampering / replay
 - Mitigations:
   - validator schema and action allowlist
   - deterministic `tx_id` generation
   - immutable append-only ledger tables
   - outbox pattern and topic separation
 
-6. Compliance abuse risk
+7. Compliance abuse risk
 - Mitigations:
   - optional geofencing/sanctions hooks are explicit and operator-toggled
   - no hidden bypass path in API route handlers
 
-7. Wrapped asset bridge depeg / custody failure
+8. Wrapped asset bridge depeg / custody failure
 - Mitigations:
   - explicit documentation of trust assumptions
   - surfaced risk warnings in UI/docs

@@ -1,19 +1,19 @@
 # mCryptoEx RUNBOOK
 
-Date: 2026-02-18
+Date: 2026-02-19
 
-## 1) Canonical docs path check
+## 1) Canonical docs path
 
-- Architecture document path is `docs/ARCHITECTURE.md` (not root `ARCHITECTURE.md`).
+- Architecture doc is `docs/ARCHITECTURE.md` (not repository root).
 
 ## 2) Prerequisites
 
-- Docker Desktop (or Docker Engine + Compose plugin)
-- Node.js 20+
-- npm 10+
-- Python 3.11+
+- Docker Desktop (or Docker Engine + Compose)
+- Node.js `20+`
+- npm `10+`
+- Python `3.11+`
 
-## 3) One-command local start
+## 3) Local one-command start
 
 macOS / Linux:
 
@@ -29,16 +29,14 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
-Core endpoints:
+Endpoints:
 
 - Web: `http://localhost:3300`
 - API: `http://localhost:8500`
 - Grafana: `http://localhost:3400`
 - Redpanda Console: `http://localhost:8088`
 
-## 4) BuildKit fallback
-
-If Docker stalls at `node:20-alpine` metadata:
+## 4) BuildKit fallback (if image metadata stalls)
 
 macOS / Linux:
 
@@ -54,110 +52,143 @@ $env:COMPOSE_DOCKER_CLI_BUILD="0"
 docker compose up --build
 ```
 
-## 5) Phase checks
+## 5) Contract environment (local-only secrets)
 
-Contracts:
+Create `packages/contracts/.env` (gitignored):
+
+```bash
+cp packages/contracts/.env.example packages/contracts/.env
+```
+
+Minimum fields:
+
+- `PRIVATE_KEY`
+- `SEPOLIA_RPC_URL`
+- `BSC_TESTNET_RPC_URL`
+- `USDC_TOKEN_ADDRESS_*`
+- `USDT_TOKEN_ADDRESS_*`
+
+Never commit `packages/contracts/.env`.
+
+## 6) Contract checks and deploy
 
 ```bash
 cd packages/contracts
 npm install
 npm test
+npm run deploy:local
 ```
 
-Web build:
+Testnets:
 
 ```bash
-npm run web:build
+npm run deploy:sepolia
+npm run deploy:bscTestnet
 ```
 
-Tempo pipeline smoke (swap note -> validator -> ledger -> analytics):
+Address outputs:
+
+- `packages/contracts/deploy/address-registry.hardhat.json`
+- `packages/contracts/deploy/address-registry.sepolia.json`
+- `packages/contracts/deploy/address-registry.bscTestnet.json`
+
+## 7) Gas estimation and funding
+
+Estimate deployment gas profile:
 
 ```bash
-python3 scripts/e2e_pipeline_check.py
+cd packages/contracts
+npm run estimate:deploy:gas
 ```
 
-Phase 5 security check bundle:
+Observed blocker in this environment:
+
+- Sepolia deployer (`0xf39F...2266`) native balance: `1 wei` (insufficient)
+- BSC testnet deployer (`0xf39F...2266`) native balance: `0`
+
+Recommended funding before deploy retries:
+
+- Sepolia deployer: at least `0.001 ETH` (practical buffer: `0.01 ETH`)
+- BSC testnet deployer: at least `0.02 BNB` (practical buffer: `0.05 BNB`)
+
+## 8) Liquidity bootstrap (post deploy)
 
 ```bash
-./scripts/security_check.sh
+cd packages/contracts
+npm run bootstrap:liquidity:sepolia
+npm run bootstrap:liquidity:bscTestnet
 ```
 
-Phase 6 chain-registry + cross-chain check bundle:
+Optional env knobs:
+
+- `BOOTSTRAP_COLLATERAL_TOKEN`
+- `BOOTSTRAP_MINT_COLLATERAL_AMOUNT`
+- `BOOTSTRAP_LP_COLLATERAL_AMOUNT`
+- `BOOTSTRAP_LP_MUSD_AMOUNT`
+
+## 9) Chain registry refresh
 
 ```bash
-npm run check:phase6
-```
-
-## 6) Generate chain registry
-
-Token/chain/indexer config is generated from deployment registries:
-
-```bash
-python3 scripts/generate_chain_registry.py
+npm run registry:generate
 ```
 
 Output:
 
 - `packages/sdk/data/chain-registry.generated.json`
 
-This file drives:
+Used by:
 
-- Tempo API `/tokens` and `/risk/assumptions`
-- indexer worker chain settings via `INDEXER_CHAIN_KEY`
+- API `/tokens`, `/risk/assumptions`
+- indexers (`INDEXER_CHAIN_KEY`)
+- web network/router registry
 
-## 7) Testnet deployment (Movement 2 baseline)
-
-Set values in `packages/contracts/.env`:
-
-- `PRIVATE_KEY`
-- `SEPOLIA_RPC_URL` (for Ethereum Sepolia)
-- `BSC_TESTNET_RPC_URL` (for BNB testnet)
-
-Deploy:
+## 10) Pipeline verification
 
 ```bash
-cd packages/contracts
-npm run deploy:sepolia
-npm run deploy:bscTestnet
+python3 scripts/e2e_pipeline_check.py --api-base http://localhost:8500
 ```
 
-Address registries are written to `packages/contracts/deploy/address-registry.<network>.json`.
+Full phase check:
 
-## 8) Timelock/multisig-ready admin handoff
+```bash
+npm run check:phase6
+```
 
-After deployment, assign governance ownership/roles to your timelock or multisig:
+## 11) Admin handoff (timelock/multisig)
 
 ```bash
 cd packages/contracts
-NEW_ADMIN_ADDRESS=0xYourTimelockOrSafe \
+NEW_ADMIN_ADDRESS=0xYourSafeOrTimelock \
 ADDRESS_REGISTRY_PATH=./deploy/address-registry.sepolia.json \
 npm run handoff:admin -- --network sepolia
 ```
 
-Optional hard cutover (revokes deployer roles):
+Then new admin executes `acceptOwnership()` on:
 
-```bash
-REVOKE_DEPLOYER_ROLES=true \
-NEW_ADMIN_ADDRESS=0xYourTimelockOrSafe \
-ADDRESS_REGISTRY_PATH=./deploy/address-registry.sepolia.json \
-npm run handoff:admin -- --network sepolia
-```
+- `HarmonyFactory`
+- `HarmonyRouter`
+- `ResonanceVault` (if deployed)
 
-Then call `acceptOwnership()` on `HarmonyFactory` and `HarmonyRouter` from the new admin.
+## 12) Manual browser flow (GUI automation unavailable)
 
-## 9) Secrets and local wallets
+If automated `open -a ...` fails with `kLSNoExecutableErr`, use manual steps:
 
-- Never commit private keys.
-- Keep local-only keys in `.local-secrets/` (already gitignored).
-- Verify no secret files are tracked:
+1. Open Chrome manually.
+2. Navigate to `http://localhost:3300/harmony`.
+3. Connect wallet (MetaMask/WalletConnect).
+4. Switch wallet network to target chain (31337 / 11155111 / 97).
+5. Select token pair (`token -> mUSD`), request quote.
+6. Review fee split and risk panel.
+7. Sign approval and swap transactions in wallet.
 
-```bash
-git ls-files .local-secrets
-```
+## 13) Troubleshooting
 
-The command should print nothing.
+- `no deployer signer found`: set `PRIVATE_KEY` in `packages/contracts/.env`.
+- `insufficient funds for gas`: fund deployer native token on target chain.
+- `column min_out does not exist`: run `docker compose down -v` and restart to reinitialize DB schemas.
+- `/quote` returns 404 on testnets: deploy contracts + bootstrap liquidity + regenerate chain registry.
 
-## 10) Stop and clean
+## 14) Stop and clean
 
 ```bash
 docker compose down -v

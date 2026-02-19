@@ -1,6 +1,6 @@
 # SECURITY
 
-Date: 2026-02-18
+Date: 2026-02-19
 
 ## Security posture
 
@@ -27,23 +27,36 @@ Implemented controls:
   - separated roles (`GOVERNOR_ROLE`, `OPERATOR_ROLE`, `PAUSER_ROLE`)
 - `HarmonyFactory`:
   - owner-controlled fee updates with max cap
+  - protocol fee cap + treasury address control
   - pausability on pair creation
   - two-step ownership (timelock/multisig compatible)
 - `HarmonyPair`:
   - reentrancy lock (`lock` modifier)
   - factory pause awareness (`EnginePaused` guard on mint/burn/swap)
   - permanent LP minimum-liquidity lock to dead address
+  - explicit protocol fee accrual event (`ProtocolFeeAccrued`)
 - `HarmonyRouter`:
   - `Pausable` + `ReentrancyGuard`
   - owner-controlled path-length cap (`maxPathLength`)
   - slippage and deadline controls
   - two-step ownership (timelock/multisig compatible)
+- `ResonanceVault`:
+  - permissionless harvest/convert with bounded incentive
+  - token allowlist and per-call amount guardrails
+  - max slippage controls for conversion calls
+  - pausability + ownership handoff (`Ownable2Step`)
+  - explicit fee/conversion/distribution events for ledger pipeline
 
 ## Backend and pipeline controls
 
 - Structured immutable ledger writes (`dex_ledger_entries`) with idempotent note insert path.
 - Validator allows only explicit DEX actions.
 - Correlation IDs are preserved across Note topics.
+- Treasury lifecycle actions are indexed:
+  - `PROTOCOL_FEE_ACCRUED`
+  - `FEE_TRANSFERRED_TO_TREASURY`
+  - `TREASURY_CONVERTED_TO_MUSD`
+  - `DISTRIBUTION_EXECUTED`
 - Optional compliance hooks (operator enabled):
   - geofencing country block list
   - sanctions blocked wallet list
