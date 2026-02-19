@@ -69,6 +69,7 @@ Minimum fields:
 - `USDT_TOKEN_ADDRESS_*`
 
 Never commit `packages/contracts/.env`.
+Never use Hardhat deterministic test keys on public testnets/mainnet.
 
 ## 6) Contract checks and deploy
 
@@ -101,15 +102,17 @@ cd packages/contracts
 npm run estimate:deploy:gas
 ```
 
-Observed blocker in this environment:
+Deployer address check:
 
-- Sepolia deployer (`0xf39F...2266`) native balance: `1 wei` (insufficient)
-- BSC testnet deployer (`0xf39F...2266`) native balance: `0`
+```bash
+cd packages/contracts
+node -e "require('dotenv').config(); const {Wallet}=require('ethers'); console.log(new Wallet(process.env.PRIVATE_KEY).address)"
+```
 
-Recommended funding before deploy retries:
+Recommended funding before deploy retries (from `estimate:deploy:gas` + safety buffer):
 
-- Sepolia deployer: at least `0.001 ETH` (practical buffer: `0.01 ETH`)
-- BSC testnet deployer: at least `0.02 BNB` (practical buffer: `0.05 BNB`)
+- Sepolia deployer: at least `0.40 ETH`
+- BSC testnet deployer: at least `0.50 BNB`
 
 ## 8) Liquidity bootstrap (post deploy)
 
@@ -125,6 +128,11 @@ Optional env knobs:
 - `BOOTSTRAP_MINT_COLLATERAL_AMOUNT`
 - `BOOTSTRAP_LP_COLLATERAL_AMOUNT`
 - `BOOTSTRAP_LP_MUSD_AMOUNT`
+
+Note:
+
+- Bootstrap requires collateral token balance in deployer wallet (USDC/USDT by default in testnet configs).
+- If deployer has only native gas token, obtain collateral test tokens first (or override collateral token config intentionally).
 
 ## 9) Chain registry refresh
 
@@ -186,7 +194,7 @@ If automated `open -a ...` fails with `kLSNoExecutableErr`, use manual steps:
 - `no deployer signer found`: set `PRIVATE_KEY` in `packages/contracts/.env`.
 - `insufficient funds for gas`: fund deployer native token on target chain.
 - `column min_out does not exist`: run `docker compose down -v` and restart to reinitialize DB schemas.
-- `/quote` returns 404 on testnets: deploy contracts + bootstrap liquidity + regenerate chain registry.
+- `/quote` returns 422 on testnets: deploy contracts + bootstrap liquidity + regenerate chain registry.
 
 ## 14) Stop and clean
 
