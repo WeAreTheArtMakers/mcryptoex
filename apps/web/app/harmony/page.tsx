@@ -100,7 +100,7 @@ const DEFAULT_TOKENS: TokenItem[] = [
 ];
 const DEFAULT_NETWORKS_BASE: NetworkItem[] = [
   { chain_id: 11155111, chain_key: 'ethereum-sepolia', name: 'Ethereum Sepolia', network: 'sepolia', token_count: 2 },
-  { chain_id: 97, chain_key: 'bnb-testnet', name: 'BNB Testnet', network: 'bscTestnet', token_count: 2 }
+  { chain_id: 97, chain_key: 'bnb-testnet', name: 'BNB Chain Testnet', network: 'bscTestnet', token_count: 2 }
 ];
 const DEFAULT_NETWORKS: NetworkItem[] = LOCAL_CHAIN_ENABLED
   ? [{ chain_id: 31337, chain_key: 'hardhat-local', name: 'Hardhat Local', network: 'hardhat', token_count: 2 }, ...DEFAULT_NETWORKS_BASE]
@@ -128,7 +128,7 @@ export default function HarmonyPage() {
   const [chainId, setChainId] = useState<number>(DEFAULT_CHAIN_ID);
   const [tokensByChain, setTokensByChain] = useState<Record<string, TokenItem[]>>({});
   const [networks, setNetworks] = useState<NetworkItem[]>(DEFAULT_NETWORKS);
-  const [tokenIn, setTokenIn] = useState<string>('WETH');
+  const [tokenIn, setTokenIn] = useState<string>('WBNB');
   const [tokenOut, setTokenOut] = useState<string>('mUSD');
   const [amountIn, setAmountIn] = useState<string>('0.1');
   const [slippageBps, setSlippageBps] = useState<number>(50);
@@ -570,6 +570,14 @@ export default function HarmonyPage() {
         </form>
 
         {error ? <p className="mt-4 text-sm text-rose-300">{error}</p> : null}
+        {error && (error.includes('404') || error.includes('no on-chain liquidity route')) ? (
+          <div className="mt-3 rounded-xl border border-rose-400/40 bg-rose-950/25 p-3 text-xs text-rose-100">
+            <p className="font-semibold">Resource not found for this swap route (404-style failure).</p>
+            <p className="mt-1">
+              Bootstrap liquidity for {tokenIn}/{tokenOut}, verify chain registry addresses, then retry quote.
+            </p>
+          </div>
+        ) : null}
         {executionStatus ? <p className="mt-2 text-xs text-cyan-100">{executionStatus}</p> : null}
 
         {quote ? (

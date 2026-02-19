@@ -76,6 +76,24 @@ type AnalyticsResponse = {
   fee_revenue: AnalyticsRow[];
 };
 
+type PairRow = {
+  chain_id: number;
+  pool_address: string;
+  token0_symbol: string;
+  token1_symbol: string;
+  reserve0_decimal: string;
+  reserve1_decimal: string;
+  swaps: number;
+  total_fee_usd: string;
+  total_amount_in: string;
+  last_swap_at?: string | null;
+  source?: string;
+};
+
+type PairsResponse = {
+  rows: PairRow[];
+};
+
 type ChartPoint = {
   bucket: string;
   label: string;
@@ -149,6 +167,8 @@ export default function ExchangePage() {
 
   const [analytics, setAnalytics] = useState<ChartPoint[]>([]);
   const [analyticsError, setAnalyticsError] = useState<string>('');
+  const [pairs, setPairs] = useState<PairRow[]>([]);
+  const [pairsError, setPairsError] = useState<string>('');
   const [walletBalances, setWalletBalances] = useState<Record<string, string>>({});
   const [balanceNonce, setBalanceNonce] = useState(0);
 
@@ -169,6 +189,18 @@ export default function ExchangePage() {
   );
   const limitStorageKey = `mcryptoex.limit-orders.v1.${chainId}`;
   const latestPoint = analytics.length ? analytics[analytics.length - 1] : null;
+  const pairSummary = useMemo(() => {
+    const filtered = pairs.filter((pair) => Number(pair.chain_id) === chainId);
+    const totalFees = filtered.reduce((sum, pair) => sum + n(pair.total_fee_usd), 0);
+    const totalSwaps = filtered.reduce((sum, pair) => sum + n(pair.swaps), 0);
+    const totalNotionalIn = filtered.reduce((sum, pair) => sum + n(pair.total_amount_in), 0);
+    return {
+      totalFees,
+      totalSwaps,
+      totalNotionalIn,
+      pools: filtered
+    };
+  }, [pairs, chainId]);
 
   useEffect(() => {
     let active = true;
@@ -250,6 +282,32 @@ export default function ExchangePage() {
     return () => {
       active = false;
       clearInterval(interval);
+    };
+  }, [chainId]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadPairs() {
+      try {
+        const res = await fetch(`${API_BASE}/pairs?chain_id=${chainId}&limit=60`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`pairs unavailable (${res.status})`);
+        const payload = (await res.json()) as PairsResponse;
+        if (!active) return;
+        setPairs(payload.rows || []);
+        setPairsError('');
+      } catch (error) {
+        if (!active) return;
+        setPairs([]);
+        setPairsError(error instanceof Error ? error.message : 'pairs unavailable');
+      }
+    }
+
+    loadPairs();
+    const timer = setInterval(loadPairs, 12_000);
+    return () => {
+      active = false;
+      clearInterval(timer);
     };
   }, [chainId]);
 
@@ -521,11 +579,13 @@ export default function ExchangePage() {
         <div className="grid gap-2 sm:grid-cols-3">
           <div className="rounded-xl border border-mint/45 bg-mint/10 p-3">
             <p className="text-[11px] uppercase tracking-[0.14em] text-mint">Volume (1m latest)</p>
-            <p className="mt-1 font-mono">{latestPoint ? latestPoint.volume.toFixed(4) : 'n/a'}</p>
+            <p className="mt-1 font-mono">
+              {latestPoint ? latestPoint.volume.toFixed(4) : pairSummary.totalNotionalIn.toFixed(4)}
+            </p>
           </div>
           <div className="rounded-xl border border-brass/45 bg-brass/10 p-3">
             <p className="text-[11px] uppercase tracking-[0.14em] text-amber-100">Fees USD (1m latest)</p>
-            <p className="mt-1 font-mono">{latestPoint ? latestPoint.fees.toFixed(4) : 'n/a'}</p>
+            <p className="mt-1 font-mono">{latestPoint ? latestPoint.fees.toFixed(4) : pairSummary.totalFees.toFixed(4)}</p>
           </div>
           <div className="rounded-xl border border-cyan-300/40 bg-cyan-500/10 p-3">
             <p className="text-[11px] uppercase tracking-[0.14em] text-cyan-100">Route Target</p>
@@ -561,10 +621,16 @@ export default function ExchangePage() {
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <div className="flex h-full items-center justify-center text-sm text-slate-300">Waiting for analytics stream...</div>
+            <div className="flex h-full flex-col items-center justify-center text-sm text-slate-300">
+              <p>Waiting for analytics stream...</p>
+              <p className="mt-1 text-xs text-slate-400">
+                Live pools: {pairSummary.pools.length} | Total swaps: {pairSummary.totalSwaps}
+              </p>
+            </div>
           )}
         </div>
         {analyticsError ? <p className="text-xs text-rose-300">{analyticsError}</p> : null}
+        {pairsError ? <p className="text-xs text-rose-300">{pairsError}</p> : null}
 
         <div className="rounded-2xl border border-slateblue/65 bg-slate-950/55 p-4">
           <div className="grid grid-cols-3 gap-2">
@@ -840,6 +906,34 @@ export default function ExchangePage() {
             </div>
           ) : (
             <p className="mt-2 text-sm text-slate-300">No local limit drafts yet.</p>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-cyan-300/35 bg-cyan-500/10 p-4">
+          <p className="text-xs uppercase tracking-[0.2em] text-cyan-100">Live Pools</p>
+          {pairSummary.pools.length ? (
+            <div className="mt-2 max-h-52 space-y-2 overflow-y-auto">
+              {pairSummary.pools.map((pair) => (
+                <div key={`${pair.chain_id}-${pair.pool_address}`} className="rounded-lg border border-slateblue/55 bg-slate-900/60 p-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold">
+                      {pair.token0_symbol}/{pair.token1_symbol}
+                    </p>
+                    <p className="font-mono text-slate-300">{shortAmount(String(pair.total_fee_usd))} USD fee</p>
+                  </div>
+                  <p className="mt-1 text-slate-300">
+                    Reserves: {shortAmount(String(pair.reserve0_decimal))} {pair.token0_symbol} /{' '}
+                    {shortAmount(String(pair.reserve1_decimal))} {pair.token1_symbol}
+                  </p>
+                  <p className="text-slate-400">
+                    Swaps: {pair.swaps} | Last swap:{' '}
+                    {pair.last_swap_at ? new Date(pair.last_swap_at).toLocaleTimeString() : 'n/a'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-slate-300">No on-chain pools discovered for this chain yet.</p>
           )}
         </section>
       </div>

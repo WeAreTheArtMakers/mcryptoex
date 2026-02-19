@@ -14,7 +14,7 @@ from fastapi.responses import ORJSONResponse
 from prometheus_client import Counter, make_asgi_app
 from pydantic import BaseModel, Field
 
-from .chain_registry import risk_assumptions_payload, tokens_payload
+from .chain_registry import load_chain_registry, risk_assumptions_payload, tokens_payload
 from .compliance import enforce_optional_compliance
 from .config import get_settings
 from .proto_codec import ProtoCodec
@@ -145,34 +145,166 @@ async def quote(
 
 
 @app.get('/pairs')
-async def pairs(limit: int = Query(default=100, ge=1, le=1000)) -> dict:
+async def pairs(
+    chain_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=100, ge=1, le=1000)
+) -> dict:
     assert _pg_pool is not None
+    registry = load_chain_registry()
+    registry_pairs: dict[tuple[int, str], dict] = {}
+
+    for chain in registry.get('chains', []):
+        try:
+            item_chain_id = int(chain.get('chain_id', 0))
+        except (TypeError, ValueError):
+            continue
+        if item_chain_id <= 0:
+            continue
+        if chain_id is not None and item_chain_id != chain_id:
+            continue
+
+        for pair in chain.get('pairs', []):
+            if not isinstance(pair, dict):
+                continue
+            pool_address = str(pair.get('pair_address', '')).strip().lower()
+            if not pool_address:
+                continue
+            registry_pairs[(item_chain_id, pool_address)] = {
+                'chain_id': item_chain_id,
+                'pool_address': pool_address,
+                'token0_symbol': str(pair.get('token0_symbol', '')).strip(),
+                'token1_symbol': str(pair.get('token1_symbol', '')).strip(),
+                'token0_address': str(pair.get('token0_address', '')).strip(),
+                'token1_address': str(pair.get('token1_address', '')).strip(),
+                'reserve0_decimal': str(pair.get('reserve0_decimal', '0')),
+                'reserve1_decimal': str(pair.get('reserve1_decimal', '0')),
+                'checked_at': pair.get('checked_at')
+            }
+
+    sql_filter = ''
+    params: list = []
+    if chain_id is not None:
+        sql_filter = 'WHERE chain_id = $1'
+        params.append(chain_id)
+
+    stats_limit = min(max(limit * 8, 500), 5000)
+    params.append(stats_limit)
+
     async with _pg_pool.acquire() as conn:
-        rows = await conn.fetch(
+        stats_rows = await conn.fetch(
             '''
             SELECT
               chain_id,
-              pool_address,
-              token_in,
-              token_out,
+              lower(pool_address) AS pool_address,
+              min(token_in) AS token_in,
+              min(token_out) AS token_out,
               COUNT(*) AS swaps,
               SUM(amount_in)::text AS total_amount_in,
               SUM(amount_out)::text AS total_amount_out,
               SUM(fee_usd)::text AS total_fee_usd,
               MAX(occurred_at) AS last_swap_at
             FROM dex_transactions
-            GROUP BY chain_id, pool_address, token_in, token_out
-            ORDER BY MAX(occurred_at) DESC
-            LIMIT $1
-            ''',
-            limit
+            '''
+            + sql_filter
+            + '''
+            GROUP BY chain_id, lower(pool_address)
+            ORDER BY MAX(occurred_at) DESC NULLS LAST, COUNT(*) DESC
+            LIMIT $'''
+            + str(len(params))
+            ,
+            *params
         )
-    return {'rows': [dict(r) for r in rows]}
+
+    stats_map: dict[tuple[int, str], dict] = {}
+    for row in stats_rows:
+        key = (int(row['chain_id']), str(row['pool_address']).lower())
+        stats_map[key] = {
+            'chain_id': int(row['chain_id']),
+            'pool_address': str(row['pool_address']).lower(),
+            'token_in': str(row['token_in']),
+            'token_out': str(row['token_out']),
+            'swaps': int(row['swaps']),
+            'total_amount_in': str(row['total_amount_in']),
+            'total_amount_out': str(row['total_amount_out']),
+            'total_fee_usd': str(row['total_fee_usd']),
+            'last_swap_at': row['last_swap_at']
+        }
+
+    merged: list[dict] = []
+    for key, pair in registry_pairs.items():
+        stat = stats_map.pop(key, None)
+        merged.append(
+            {
+                'chain_id': pair['chain_id'],
+                'pool_address': pair['pool_address'],
+                'token0_symbol': pair['token0_symbol'],
+                'token1_symbol': pair['token1_symbol'],
+                'token0_address': pair['token0_address'],
+                'token1_address': pair['token1_address'],
+                'reserve0_decimal': pair['reserve0_decimal'],
+                'reserve1_decimal': pair['reserve1_decimal'],
+                'swaps': int(stat['swaps']) if stat else 0,
+                'total_amount_in': stat['total_amount_in'] if stat else '0',
+                'total_amount_out': stat['total_amount_out'] if stat else '0',
+                'total_fee_usd': stat['total_fee_usd'] if stat else '0',
+                'last_swap_at': stat['last_swap_at'] if stat else None,
+                'checked_at': pair['checked_at'],
+                'source': 'registry+ledger' if stat else 'registry'
+            }
+        )
+
+    for (_, _pool_address), stat in stats_map.items():
+        merged.append(
+            {
+                'chain_id': stat['chain_id'],
+                'pool_address': stat['pool_address'],
+                'token0_symbol': stat['token_in'],
+                'token1_symbol': stat['token_out'],
+                'token0_address': '',
+                'token1_address': '',
+                'reserve0_decimal': '0',
+                'reserve1_decimal': '0',
+                'swaps': int(stat['swaps']),
+                'total_amount_in': stat['total_amount_in'],
+                'total_amount_out': stat['total_amount_out'],
+                'total_fee_usd': stat['total_fee_usd'],
+                'last_swap_at': stat['last_swap_at'],
+                'checked_at': None,
+                'source': 'ledger'
+            }
+        )
+
+    merged.sort(
+        key=lambda row: (
+            int(row['swaps']),
+            row.get('last_swap_at') or datetime.fromtimestamp(0, tz=timezone.utc)
+        ),
+        reverse=True
+    )
+    return {'rows': merged[:limit]}
 
 
 @app.get('/ledger/recent')
-async def ledger_recent(limit: int = Query(default=100, ge=1, le=500)) -> dict:
+async def ledger_recent(
+    limit: int = Query(default=100, ge=1, le=500),
+    chain_id: int | None = Query(default=None, gt=0),
+    entry_type: str | None = Query(default=None)
+) -> dict:
     assert _pg_pool is not None
+    filters: list[str] = []
+    params: list = []
+
+    if chain_id is not None:
+        params.append(chain_id)
+        filters.append(f'chain_id = ${len(params)}')
+
+    if entry_type is not None and entry_type.strip():
+        params.append(entry_type.strip())
+        filters.append(f'entry_type = ${len(params)}')
+
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ''
+    params.append(limit)
+
     async with _pg_pool.acquire() as conn:
         rows = await conn.fetch(
             '''
@@ -194,10 +326,14 @@ async def ledger_recent(limit: int = Query(default=100, ge=1, le=500)) -> dict:
               occurred_at,
               created_at
             FROM dex_ledger_entries
+            '''
+            + where_clause
+            + '''
             ORDER BY entry_id DESC
-            LIMIT $1
-            ''',
-            limit
+            LIMIT $'''
+            + str(len(params))
+            ,
+            *params
         )
     return {'rows': [dict(r) for r in rows]}
 

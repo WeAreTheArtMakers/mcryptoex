@@ -1,6 +1,21 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
+
+const API_BASE = process.env.NEXT_PUBLIC_TEMPO_API_BASE || 'http://localhost:8500';
 
 type AnalyticsPayload = {
   minutes: number;
@@ -12,30 +27,77 @@ type AnalyticsPayload = {
   conversion_slippage: Array<Record<string, string | number>>;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_TEMPO_API_BASE || 'http://localhost:8500';
+type NetworkItem = {
+  chain_id: number;
+  name: string;
+};
+
+type TokensPayload = {
+  networks?: NetworkItem[];
+};
+
+type TimePoint = {
+  bucket: string;
+  label: string;
+  volume: number;
+  fees: number;
+  gas: number;
+  slippage: number;
+};
+
+type FeePoint = {
+  key: string;
+  fee: number;
+};
+
+function n(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 function sumDecimal(rows: Array<Record<string, string | number>>, field: string): number {
-  return rows.reduce((sum, row) => sum + Number(row[field] || 0), 0);
+  return rows.reduce((sum, row) => sum + n(row[field]), 0);
 }
 
 export default function AnalyticsPage() {
   const [minutes, setMinutes] = useState(180);
+  const [chainFilter, setChainFilter] = useState<number>(97);
+  const [networks, setNetworks] = useState<NetworkItem[]>([
+    { chain_id: 97, name: 'BNB Chain Testnet' },
+    { chain_id: 11155111, name: 'Ethereum Sepolia' }
+  ]);
   const [payload, setPayload] = useState<AnalyticsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [lastUpdateAt, setLastUpdateAt] = useState<Date | null>(null);
 
   useEffect(() => {
     let active = true;
+
     async function load() {
       try {
         setLoading(true);
-        const res = await fetch(`${API_BASE}/analytics?minutes=${minutes}`, { cache: 'no-store' });
-        if (!res.ok) {
-          throw new Error(`analytics endpoint unavailable (${res.status})`);
+
+        const [analyticsRes, tokensRes] = await Promise.all([
+          fetch(`${API_BASE}/analytics?minutes=${minutes}`, { cache: 'no-store' }),
+          fetch(`${API_BASE}/tokens`, { cache: 'no-store' })
+        ]);
+
+        if (!analyticsRes.ok) {
+          throw new Error(`analytics endpoint unavailable (${analyticsRes.status})`);
         }
-        const body = (await res.json()) as AnalyticsPayload;
+        if (!tokensRes.ok) {
+          throw new Error(`token registry unavailable (${tokensRes.status})`);
+        }
+
+        const body = (await analyticsRes.json()) as AnalyticsPayload;
+        const tokenBody = (await tokensRes.json()) as TokensPayload;
+
         if (!active) return;
+
         setPayload(body);
+        if (tokenBody.networks?.length) setNetworks(tokenBody.networks);
+        setLastUpdateAt(new Date());
         setError('');
       } catch (loadError) {
         if (!active) return;
@@ -47,34 +109,155 @@ export default function AnalyticsPage() {
     }
 
     load();
-    const timer = setInterval(load, 15_000);
+    const timer = setInterval(load, 12_000);
     return () => {
       active = false;
       clearInterval(timer);
     };
   }, [minutes]);
 
-  const summary = useMemo(() => {
-    if (!payload) return null;
+  const filtered = useMemo(() => {
+    if (!payload) {
+      return {
+        volumeRows: [] as Array<Record<string, string | number>>,
+        feeRows: [] as Array<Record<string, string | number>>,
+        gasRows: [] as Array<Record<string, string | number>>,
+        feeBreakdownRows: [] as Array<Record<string, string | number>>,
+        revenueRows: [] as Array<Record<string, string | number>>,
+        slippageRows: [] as Array<Record<string, string | number>>
+      };
+    }
+
+    const byChain = (rows: Array<Record<string, string | number>>) =>
+      rows.filter((row) => chainFilter === 0 || Number(row.chain_id) === chainFilter);
+
     return {
-      totalVolume: sumDecimal(payload.volume_by_chain_token, 'volume'),
-      totalFeeRevenue: sumDecimal(payload.fee_revenue, 'revenue_usd'),
-      avgGas: payload.gas_cost_averages.length
-        ? sumDecimal(payload.gas_cost_averages, 'avg_gas_cost_usd') / payload.gas_cost_averages.length
-        : 0,
-      revenueMusd: sumDecimal(payload.protocol_revenue_musd_daily, 'revenue_musd'),
-      avgSlippageBps: payload.conversion_slippage.length
-        ? sumDecimal(payload.conversion_slippage, 'slippage_bps') / payload.conversion_slippage.length
+      volumeRows: byChain(payload.volume_by_chain_token),
+      feeRows: byChain(payload.fee_revenue),
+      gasRows: byChain(payload.gas_cost_averages),
+      feeBreakdownRows: byChain(payload.fee_breakdown_by_pool_token),
+      revenueRows: byChain(payload.protocol_revenue_musd_daily),
+      slippageRows: byChain(payload.conversion_slippage)
+    };
+  }, [payload, chainFilter]);
+
+  const timeline = useMemo<TimePoint[]>(() => {
+    const map = new Map<string, TimePoint>();
+
+    for (const row of filtered.volumeRows) {
+      const bucket = String(row.bucket || '');
+      if (!bucket) continue;
+      const point = map.get(bucket) || {
+        bucket,
+        label: new Date(bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        volume: 0,
+        fees: 0,
+        gas: 0,
+        slippage: 0
+      };
+      point.volume += n(row.volume);
+      map.set(bucket, point);
+    }
+
+    for (const row of filtered.feeRows) {
+      const bucket = String(row.bucket || '');
+      if (!bucket) continue;
+      const point = map.get(bucket) || {
+        bucket,
+        label: new Date(bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        volume: 0,
+        fees: 0,
+        gas: 0,
+        slippage: 0
+      };
+      point.fees += n(row.revenue_usd);
+      map.set(bucket, point);
+    }
+
+    for (const row of filtered.gasRows) {
+      const bucket = String(row.bucket || '');
+      if (!bucket) continue;
+      const point = map.get(bucket) || {
+        bucket,
+        label: new Date(bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        volume: 0,
+        fees: 0,
+        gas: 0,
+        slippage: 0
+      };
+      point.gas += n(row.avg_gas_cost_usd);
+      map.set(bucket, point);
+    }
+
+    for (const row of filtered.slippageRows) {
+      const bucket = String(row.bucket || '');
+      if (!bucket) continue;
+      const point = map.get(bucket) || {
+        bucket,
+        label: new Date(bucket).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        volume: 0,
+        fees: 0,
+        gas: 0,
+        slippage: 0
+      };
+      point.slippage += n(row.slippage_bps);
+      map.set(bucket, point);
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.bucket.localeCompare(b.bucket)).slice(-140);
+  }, [filtered]);
+
+  const feeByPoolOrToken = useMemo<FeePoint[]>(() => {
+    const map = new Map<string, number>();
+    for (const row of filtered.feeBreakdownRows) {
+      const pool = String(row.pool_address || '').slice(0, 10);
+      const token = String(row.token || 'token');
+      const key = `${token}:${pool || 'n/a'}`;
+      map.set(key, (map.get(key) || 0) + n(row.fee_amount));
+    }
+    return Array.from(map.entries())
+      .map(([key, fee]) => ({ key, fee }))
+      .sort((a, b) => b.fee - a.fee)
+      .slice(0, 10);
+  }, [filtered]);
+
+  const revenueDaily = useMemo(
+    () =>
+      filtered.revenueRows
+        .map((row) => ({
+          day: String(row.bucket || '').slice(0, 10),
+          revenue: n(row.revenue_musd)
+        }))
+        .sort((a, b) => a.day.localeCompare(b.day))
+        .slice(-30),
+    [filtered]
+  );
+
+  const summary = useMemo(() => {
+    return {
+      totalVolume: sumDecimal(filtered.volumeRows, 'volume'),
+      totalFeeRevenue: sumDecimal(filtered.feeRows, 'revenue_usd'),
+      avgGas: filtered.gasRows.length ? sumDecimal(filtered.gasRows, 'avg_gas_cost_usd') / filtered.gasRows.length : 0,
+      revenueMusd: sumDecimal(filtered.revenueRows, 'revenue_musd'),
+      avgSlippageBps: filtered.slippageRows.length
+        ? sumDecimal(filtered.slippageRows, 'slippage_bps') / filtered.slippageRows.length
         : 0
     };
-  }, [payload]);
+  }, [filtered]);
 
   return (
-    <section className="rounded-2xl border border-slateblue/70 bg-slate-900/50 p-6">
-      <p className="text-xs uppercase tracking-[0.2em] text-brass">Analytics</p>
-      <h2 className="mt-2 text-2xl font-semibold">Tempo Metrics Dashboard</h2>
+    <section className="space-y-4 rounded-3xl border border-slateblue/70 bg-gradient-to-br from-[#101a34]/95 via-[#122744]/90 to-[#1a2f4d]/80 p-6">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-brass">Analytics</p>
+          <h2 className="mt-2 text-2xl font-semibold">Tempo Metrics Dashboard</h2>
+        </div>
+        <div className="rounded-xl border border-slateblue/70 bg-slate-950/60 px-3 py-2 text-xs text-slate-200">
+          Live refresh 12s {lastUpdateAt ? `| ${lastUpdateAt.toLocaleTimeString()}` : ''}
+        </div>
+      </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm text-slate-200">
           Window (minutes)
           <input
@@ -86,34 +269,145 @@ export default function AnalyticsPage() {
             className="ml-2 w-28 rounded-lg border border-slateblue/70 bg-slate-950/80 px-2 py-1"
           />
         </label>
+        <label className="text-sm text-slate-200">
+          Chain
+          <select
+            value={chainFilter}
+            onChange={(e) => setChainFilter(Number(e.target.value))}
+            className="ml-2 rounded-lg border border-slateblue/70 bg-slate-950/80 px-2 py-1"
+          >
+            <option value={0}>All Chains</option>
+            {networks.map((network) => (
+              <option key={network.chain_id} value={network.chain_id}>
+                {network.name} ({network.chain_id})
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      {loading ? <p className="mt-4 text-sm text-slate-300">Loading analytics...</p> : null}
-      {error ? <p className="mt-4 text-sm text-rose-300">{error}</p> : null}
+      {loading ? <p className="text-sm text-slate-300">Loading analytics...</p> : null}
+      {error ? <p className="text-sm text-rose-300">{error}</p> : null}
 
-      {summary && !loading && !error ? (
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
-            <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Total Volume</p>
-            <p className="mt-1 font-mono text-lg">{summary.totalVolume.toFixed(4)}</p>
+      {!loading && !error ? (
+        <>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Total Volume</p>
+              <p className="mt-1 font-mono text-lg">{summary.totalVolume.toFixed(4)}</p>
+            </div>
+            <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Fee Revenue (USD)</p>
+              <p className="mt-1 font-mono text-lg">{summary.totalFeeRevenue.toFixed(4)}</p>
+            </div>
+            <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Avg Gas (USD)</p>
+              <p className="mt-1 font-mono text-lg">{summary.avgGas.toFixed(4)}</p>
+            </div>
+            <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Revenue (mUSD)</p>
+              <p className="mt-1 font-mono text-lg">{summary.revenueMusd.toFixed(4)}</p>
+            </div>
+            <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Conv. Slippage (bps)</p>
+              <p className="mt-1 font-mono text-lg">{summary.avgSlippageBps.toFixed(2)}</p>
+            </div>
           </div>
-          <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
-            <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Fee Revenue (USD)</p>
-            <p className="mt-1 font-mono text-lg">{summary.totalFeeRevenue.toFixed(4)}</p>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="h-72 rounded-2xl border border-slateblue/65 bg-[#081223]/70 p-2">
+              {timeline.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={timeline}>
+                    <defs>
+                      <linearGradient id="analyticsVolume" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#34d399" stopOpacity={0.5} />
+                        <stop offset="95%" stopColor="#34d399" stopOpacity={0.05} />
+                      </linearGradient>
+                      <linearGradient id="analyticsFees" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.04} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.45} />
+                    <XAxis dataKey="label" stroke="#cbd5e1" tick={{ fontSize: 11 }} minTickGap={20} />
+                    <YAxis yAxisId="left" stroke="#34d399" tick={{ fontSize: 11 }} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#f59e0b" tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                      formatter={(value, name) => [n(value).toFixed(6), String(name)]}
+                    />
+                    <Area yAxisId="left" type="monotone" dataKey="volume" stroke="#34d399" fill="url(#analyticsVolume)" />
+                    <Area yAxisId="right" type="monotone" dataKey="fees" stroke="#f59e0b" fill="url(#analyticsFees)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-300">No volume/fee bars yet.</div>
+              )}
+            </div>
+
+            <div className="h-72 rounded-2xl border border-slateblue/65 bg-[#081223]/70 p-2">
+              {timeline.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={timeline}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.4} />
+                    <XAxis dataKey="label" stroke="#cbd5e1" tick={{ fontSize: 11 }} minTickGap={20} />
+                    <YAxis yAxisId="left" stroke="#7dd3fc" tick={{ fontSize: 11 }} />
+                    <YAxis yAxisId="right" orientation="right" stroke="#fda4af" tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                      formatter={(value, name) => [n(value).toFixed(6), String(name)]}
+                    />
+                    <Line yAxisId="left" dataKey="gas" name="avg_gas_usd" stroke="#38bdf8" dot={false} strokeWidth={2} />
+                    <Line yAxisId="right" dataKey="slippage" name="slippage_bps" stroke="#fb7185" dot={false} strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-300">No gas/slippage bars yet.</div>
+              )}
+            </div>
           </div>
-          <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
-            <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Avg Gas (USD)</p>
-            <p className="mt-1 font-mono text-lg">{summary.avgGas.toFixed(4)}</p>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="h-64 rounded-2xl border border-slateblue/65 bg-[#081223]/70 p-2">
+              {feeByPoolOrToken.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={feeByPoolOrToken} margin={{ top: 8, right: 8, left: 0, bottom: 50 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.35} />
+                    <XAxis dataKey="key" angle={-25} textAnchor="end" height={58} stroke="#cbd5e1" tick={{ fontSize: 10 }} />
+                    <YAxis stroke="#34d399" tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                      formatter={(value) => [n(value).toFixed(6), 'fee_amount']}
+                    />
+                    <Bar dataKey="fee" fill="#34d399" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-300">No fee breakdown rows yet.</div>
+              )}
+            </div>
+
+            <div className="h-64 rounded-2xl border border-slateblue/65 bg-[#081223]/70 p-2">
+              {revenueDaily.length ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={revenueDaily} margin={{ top: 8, right: 8, left: 0, bottom: 30 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.35} />
+                    <XAxis dataKey="day" stroke="#cbd5e1" tick={{ fontSize: 10 }} />
+                    <YAxis stroke="#f59e0b" tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '0.75rem' }}
+                      formatter={(value) => [n(value).toFixed(6), 'revenue_musd']}
+                    />
+                    <Bar dataKey="revenue" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-300">No protocol mUSD revenue rows yet.</div>
+              )}
+            </div>
           </div>
-          <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
-            <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Revenue (mUSD)</p>
-            <p className="mt-1 font-mono text-lg">{summary.revenueMusd.toFixed(4)}</p>
-          </div>
-          <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
-            <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Conv. Slippage (bps)</p>
-            <p className="mt-1 font-mono text-lg">{summary.avgSlippageBps.toFixed(2)}</p>
-          </div>
-        </div>
+        </>
       ) : null}
     </section>
   );
