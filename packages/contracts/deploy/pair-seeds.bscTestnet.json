@@ -1,0 +1,135 @@
+{
+  "tokens": [
+    {
+      "symbol": "mUSD",
+      "name": "Musical USD",
+      "address": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
+      "decimals": 18,
+      "source": "seed"
+    },
+    {
+      "symbol": "USDT",
+      "name": "USD Tether",
+      "address": "0x66E972502A34A625828C544a1914E8D8cc2A9dE5",
+      "decimals": 18,
+      "source": "seed"
+    },
+    {
+      "symbol": "WBNB",
+      "name": "Wrapped BNB",
+      "address": "0xae13d989dac2f0debff460ac112a837c89baa7cd",
+      "decimals": 18,
+      "source": "seed"
+    },
+    {
+      "symbol": "WBTC",
+      "name": "Wrapped BTC (seed)",
+      "address": "seed-wbtc-bsc",
+      "decimals": 18,
+      "source": "seed"
+    },
+    {
+      "symbol": "WETH",
+      "name": "Wrapped ETH (seed)",
+      "address": "seed-weth-bsc",
+      "decimals": 18,
+      "source": "seed"
+    },
+    {
+      "symbol": "WSOL",
+      "name": "Wrapped SOL (seed)",
+      "address": "seed-wsol-bsc",
+      "decimals": 18,
+      "source": "seed"
+    },
+    {
+      "symbol": "WAVAX",
+      "name": "Wrapped AVAX (seed)",
+      "address": "seed-wavax-bsc",
+      "decimals": 18,
+      "source": "seed"
+    }
+  ],
+  "pairs": [
+    {
+      "pair_address": "0x1e416713b1d40c4d38b643ff9ca6c52f55be1c20",
+      "token0_address": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
+      "token1_address": "0x66E972502A34A625828C544a1914E8D8cc2A9dE5",
+      "token0_symbol": "mUSD",
+      "token1_symbol": "USDT",
+      "reserve0_decimal": "160",
+      "reserve1_decimal": "160",
+      "checked_at": "2026-02-19T14:16:15Z"
+    },
+    {
+      "pair_address": "0x6c5c0e49005d9b49a15f8306511d0b01fad97897",
+      "token0_address": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
+      "token1_address": "0xae13d989dac2f0debff460ac112a837c89baa7cd",
+      "token0_symbol": "mUSD",
+      "token1_symbol": "WBNB",
+      "reserve0_decimal": "40",
+      "reserve1_decimal": "0.5",
+      "checked_at": "2026-02-19T14:16:15Z"
+    },
+    {
+      "pair_address": "0x44dc138e34fa84f90f5671eeac319e3d3d9a0dac",
+      "token0_address": "",
+      "token1_address": "",
+      "token0_symbol": "mUSD",
+      "token1_symbol": "WBTC",
+      "reserve0_decimal": "80",
+      "reserve1_decimal": "0.1",
+      "checked_at": "2026-02-19T14:16:15Z"
+    },
+    {
+      "pair_address": "0x2a2b5d174e21c84216da5ee37441335048f72c1d",
+      "token0_address": "",
+      "token1_address": "",
+      "token0_symbol": "mUSD",
+      "token1_symbol": "WETH",
+      "reserve0_decimal": "80",
+      "reserve1_decimal": "1",
+      "checked_at": "2026-02-19T14:16:15Z"
+    },
+    {
+      "pair_address": "0x910bd9b932bfe8a389d87e2018d26f40c2caca10",
+      "token0_address": "",
+      "token1_address": "",
+      "token0_symbol": "mUSD",
+      "token1_symbol": "WBTC",
+      "reserve0_decimal": "40",
+      "reserve1_decimal": "0.05",
+      "checked_at": "2026-02-19T14:16:15Z"
+    },
+    {
+      "pair_address": "0x3083a173b7091cf583cc316dcf61b425cd99e243",
+      "token0_address": "",
+      "token1_address": "",
+      "token0_symbol": "mUSD",
+      "token1_symbol": "WETH",
+      "reserve0_decimal": "40",
+      "reserve1_decimal": "0.5",
+      "checked_at": "2026-02-19T14:16:15Z"
+    },
+    {
+      "pair_address": "0xe713c91ef1cdd199199d50f24ae8eb40cec38a31",
+      "token0_address": "",
+      "token1_address": "",
+      "token0_symbol": "mUSD",
+      "token1_symbol": "WSOL",
+      "reserve0_decimal": "80",
+      "reserve1_decimal": "16",
+      "checked_at": "2026-02-19T14:16:15Z"
+    },
+    {
+      "pair_address": "0xcc1b4b3421f1b323e085d4b37b076fa190c5e6ae",
+      "token0_address": "",
+      "token1_address": "",
+      "token0_symbol": "mUSD",
+      "token1_symbol": "WAVAX",
+      "reserve0_decimal": "80",
+      "reserve1_decimal": "10",
+      "checked_at": "2026-02-19T14:16:15Z"
+    }
+  ]
+}

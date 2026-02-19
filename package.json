@@ -9,6 +9,8 @@
     "dev:ps": "docker compose ps",
     "dev:logs": "docker compose logs -f",
     "registry:generate": "python3 scripts/generate_chain_registry.py",
+    "pairs:activate:bsc": "cd packages/contracts && npm run bootstrap:allpairs:bscTestnet",
+    "pairs:activate:sepolia": "cd packages/contracts && npm run bootstrap:allpairs:sepolia",
     "check:phase3": "python3 scripts/e2e_pipeline_check.py",
     "web:build": "cd apps/web && npm run build",
     "test:contracts": "cd packages/contracts && npm test",

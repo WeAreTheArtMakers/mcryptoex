@@ -322,6 +322,26 @@ export default function HarmonyPage() {
   }, [firstTradeIntent, chainId]);
 
   useEffect(() => {
+    if (!isConnected) return;
+    const musdBalance = walletBalances[musdSymbol] || walletBalances.mUSD || walletBalances.MUSD || '0';
+    if (toDecimal(musdBalance) > 0.0000001) return;
+
+    if (tokenOut.toUpperCase() !== musdSymbol.toUpperCase()) {
+      setTokenOut(musdSymbol);
+    }
+
+    if (tokenIn.toUpperCase() === musdSymbol.toUpperCase()) {
+      const sellableFallback =
+        chainTokens.find((token) => token.symbol.toUpperCase() !== 'MUSD' && toDecimal(walletBalances[token.symbol] || '0') > 0) ||
+        chainTokens.find((token) => token.symbol.toUpperCase() === wrappedNativeSymbol.toUpperCase()) ||
+        chainTokens.find((token) => token.symbol.toUpperCase() !== 'MUSD');
+      if (sellableFallback) {
+        setTokenIn(sellableFallback.symbol);
+      }
+    }
+  }, [chainTokens, isConnected, musdSymbol, tokenIn, tokenOut, walletBalances, wrappedNativeSymbol]);
+
+  useEffect(() => {
     const current = musdMintSource.toUpperCase();
     if (tokenBySymbolUpper.has(current)) {
       return;
@@ -929,6 +949,10 @@ export default function HarmonyPage() {
   const sellableRows = balanceRows.filter(
     (row) => Number(row.balance) > 0 && row.token.symbol.toUpperCase() !== 'MUSD'
   );
+  const musdBalanceValue = walletBalances[musdSymbol] || walletBalances.mUSD || walletBalances.MUSD || '0';
+  const needsMusdOnboarding = isConnected && toDecimal(musdBalanceValue) <= 0.0000001;
+  const showMusdFirstFlow = firstTradeIntent || needsMusdOnboarding;
+  const preferredFundingTokenSymbol = sellableRows[0]?.token.symbol || wrappedNativeSymbol;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
@@ -938,11 +962,13 @@ export default function HarmonyPage() {
         <p className="mt-2 text-sm text-slate-200">
           Quotes are registry-aware and liquidity-aware. Execution is non-custodial and signed in your wallet.
         </p>
-        {firstTradeIntent ? (
+        {showMusdFirstFlow ? (
           <div className="mt-4 rounded-xl border border-brass/50 bg-amber-950/20 p-4 text-sm text-amber-100">
             <p className="text-xs uppercase tracking-[0.16em] text-amber-200">Quick Start</p>
             <p className="mt-1">
-              First convert your wallet funds into {musdSymbol}, then continue trading in Exchange Pro.
+              {needsMusdOnboarding
+                ? `No ${musdSymbol} detected. Convert wallet funds into ${musdSymbol}, then continue trading in Exchange Pro.`
+                : `First convert your wallet funds into ${musdSymbol}, then continue trading in Exchange Pro.`}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
@@ -955,14 +981,14 @@ export default function HarmonyPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setTokenIn(wrappedNativeSymbol);
+                  setTokenIn(preferredFundingTokenSymbol);
                   setTokenOut(musdSymbol);
                   setAmountIn(wrapAmount || '0.1');
                   setQuote(null);
                 }}
                 className="rounded-lg border border-cyan-300/60 bg-cyan-500/20 px-2.5 py-1.5 text-xs font-semibold text-cyan-100"
               >
-                Use {wrappedNativeSymbol} {'->'} {musdSymbol}
+                Use {preferredFundingTokenSymbol} {'->'} {musdSymbol}
               </button>
               <a
                 href="/pro"

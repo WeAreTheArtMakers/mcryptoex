@@ -70,6 +70,7 @@ Minimum fields:
 
 Never commit `packages/contracts/.env`.
 Never use Hardhat deterministic test keys on public testnets/mainnet.
+Never collect or store end-user private keys in backend/local operator wallets (non-custodial model).
 
 ## 6) Contract checks and deploy
 
@@ -122,12 +123,23 @@ npm run bootstrap:liquidity:sepolia
 npm run bootstrap:liquidity:bscTestnet
 ```
 
+Major + registry-wide mUSD pair activation:
+
+```bash
+cd packages/contracts
+npm run bootstrap:allpairs:sepolia
+npm run bootstrap:allpairs:bscTestnet
+```
+
 Optional env knobs:
 
 - `BOOTSTRAP_COLLATERAL_TOKEN`
 - `BOOTSTRAP_MINT_COLLATERAL_AMOUNT`
 - `BOOTSTRAP_LP_COLLATERAL_AMOUNT`
 - `BOOTSTRAP_LP_MUSD_AMOUNT`
+- `BOOTSTRAP_ENABLE_REGISTRY_TOKEN_POOLS=true`
+- `BOOTSTRAP_REGISTRY_TOKEN_LIMIT=200`
+- `BOOTSTRAP_EXTRA_TOKEN_ADDRESSES=0x...,0x...`
 
 Note:
 
@@ -143,6 +155,9 @@ npm run registry:generate
 Output:
 
 - `packages/sdk/data/chain-registry.generated.json`
+- Optional offline fallback seeds:
+  - `packages/contracts/deploy/pair-seeds.bscTestnet.json`
+  - `packages/contracts/deploy/pair-seeds.sepolia.json` (optional, create when needed)
 
 Used by:
 

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ethers, network } from 'hardhat';
@@ -16,7 +16,27 @@ type Registry = {
     symbol?: string;
     decimals?: number;
   }>;
+  targets?: Array<{
+    token: string;
+    symbol?: string;
+    pair?: string;
+  }>;
   collateralToken?: string | null;
+};
+
+type ChainRegistryToken = {
+  symbol?: string;
+  address?: string;
+  decimals?: number;
+};
+
+type ChainRegistryChain = {
+  chain_id?: number;
+  tokens?: ChainRegistryToken[];
+};
+
+type ChainRegistryPayload = {
+  chains?: ChainRegistryChain[];
 };
 
 type CollateralConfig = {
@@ -66,11 +86,28 @@ function registryPathForNetwork(): string {
   return join(__dirname, '..', 'deploy', `address-registry.${network.name}.json`);
 }
 
+function chainRegistryPath(): string {
+  const explicit = process.env.CHAIN_REGISTRY_PATH;
+  if (explicit && explicit.trim().length > 0) return explicit.trim();
+  return join(__dirname, '..', '..', 'sdk', 'data', 'chain-registry.generated.json');
+}
+
 function readRegistry(path: string): Registry {
   if (!existsSync(path)) {
     throw new Error(`registry file not found: ${path}`);
   }
   return JSON.parse(readFileSync(path, 'utf8')) as Registry;
+}
+
+function readChainRegistry(path: string): ChainRegistryPayload | null {
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as ChainRegistryPayload;
+    if (!Array.isArray(parsed.chains)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 function parseCsv(input: string | undefined): string[] {
@@ -96,6 +133,10 @@ function normalizeSymbol(symbol: string): string {
   return symbol.trim().toUpperCase();
 }
 
+function normalizeAddress(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 function amountEnv(name: string, defaultValue: string): string {
   const value = process.env[name];
   if (!value || !value.trim()) return defaultValue;
@@ -111,6 +152,31 @@ function tokenAddressEnvForSymbol(symbol: string): string {
   const value = process.env[`BOOTSTRAP_TOKEN_${normalizeSymbolEnvKey(symbol)}_ADDRESS`];
   if (!value) return '';
   return value.trim();
+}
+
+function tokenAddressLabel(address: string): string {
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
+function parseExtraTokenAddresses(): string[] {
+  return parseCsv(process.env.BOOTSTRAP_EXTRA_TOKEN_ADDRESSES)
+    .map((token) => token.trim())
+    .filter((token) => ethers.isAddress(token));
+}
+
+function loadChainRegistryTokenAddresses(chainId: number): string[] {
+  const payload = readChainRegistry(chainRegistryPath());
+  if (!payload || !Array.isArray(payload.chains)) return [];
+  const chain = payload.chains.find((item) => Number(item?.chain_id || 0) === chainId);
+  if (!chain || !Array.isArray(chain.tokens)) return [];
+
+  const addresses: string[] = [];
+  for (const token of chain.tokens) {
+    const address = String(token?.address || '').trim();
+    if (!ethers.isAddress(address)) continue;
+    addresses.push(address);
+  }
+  return addresses;
 }
 
 function defaultLpTokenAmount(symbol: string, decimals: number): string {
@@ -161,6 +227,36 @@ function dedupeCollaterals(items: CollateralConfig[]): CollateralConfig[] {
     output.push({ token, symbol: item.symbol });
   }
   return output;
+}
+
+function persistTargetRegistry(
+  registryPath: string,
+  registry: Registry,
+  createdPools: Array<{ symbol: string; token: string; pair: string }>
+): void {
+  const writeTargets = boolEnv('BOOTSTRAP_WRITE_TARGETS_TO_REGISTRY', true);
+  if (!writeTargets) return;
+
+  const byToken = new Map<string, { symbol: string; token: string; pair?: string }>();
+  const existingTargets = Array.isArray(registry.targets) ? registry.targets : [];
+  for (const item of existingTargets) {
+    const token = String(item?.token || '').trim();
+    if (!ethers.isAddress(token)) continue;
+    const symbol = normalizeSymbol(String(item?.symbol || tokenAddressLabel(token)));
+    byToken.set(token.toLowerCase(), { symbol, token, pair: String(item?.pair || '').trim() || undefined });
+  }
+
+  for (const pool of createdPools) {
+    const token = pool.token.trim();
+    if (!ethers.isAddress(token)) continue;
+    const symbol = normalizeSymbol(pool.symbol);
+    if (symbol === 'MUSD') continue;
+    byToken.set(token.toLowerCase(), { symbol, token, pair: pool.pair });
+  }
+
+  const targets = Array.from(byToken.values()).sort((a, b) => a.symbol.localeCompare(b.symbol));
+  const nextRegistry: Registry = { ...registry, targets };
+  writeFileSync(registryPath, `${JSON.stringify(nextRegistry, null, 2)}\n`, 'utf8');
 }
 
 function resolveCollateralTargets(registry: Registry): CollateralConfig[] {
@@ -613,6 +709,106 @@ async function main(): Promise<void> {
       console.log(`added LP: ${symbol} pair=${pair}`);
     }
   }
+
+  if (boolEnv('BOOTSTRAP_ENABLE_REGISTRY_TOKEN_POOLS', false)) {
+    const includeRegistry = boolEnv('BOOTSTRAP_INCLUDE_CHAIN_REGISTRY_TOKENS', true);
+    const registryLimit = Number.parseInt(process.env.BOOTSTRAP_REGISTRY_TOKEN_LIMIT || '200', 10);
+    const maxTargets = Number.isFinite(registryLimit) && registryLimit > 0 ? registryLimit : 200;
+
+    const tokenCandidates = new Set<string>();
+    for (const address of parseExtraTokenAddresses()) tokenCandidates.add(normalizeAddress(address));
+    if (includeRegistry) {
+      for (const address of loadChainRegistryTokenAddresses(chainId)) {
+        tokenCandidates.add(normalizeAddress(address));
+      }
+    }
+
+    const tokenAddresses = Array.from(tokenCandidates)
+      .filter((address) => ethers.isAddress(address))
+      .slice(0, maxTargets);
+
+    for (const tokenAddress of tokenAddresses) {
+      if (tokenAddress === musdAddress) continue;
+      if (handledTokenAddresses.has(tokenAddress)) continue;
+
+      try {
+        const token = await ethers.getContractAt('IERC20Metadata', tokenAddress);
+        const symbol = normalizeSymbol(await token.symbol().catch(() => tokenAddressLabel(tokenAddress)));
+        const decimals = Number(await token.decimals().catch(() => 18));
+
+        const existingSymbolAddress = existingTokenBySymbol.get(symbol);
+        if (existingSymbolAddress && normalizeAddress(existingSymbolAddress) !== tokenAddress) {
+          console.log(
+            `skip ${symbol}: existing symbol already mapped to ${existingSymbolAddress}, candidate=${tokenAddress}`
+          );
+          continue;
+        }
+
+        const lpTokenAmount = amountEnvForSymbol(
+          'BOOTSTRAP_LP',
+          symbol,
+          'BOOTSTRAP_LP_TARGET_TOKEN_AMOUNT',
+          defaultLpTokenAmount(symbol, decimals)
+        );
+        const lpMusdAmount = amountEnvForSymbol(
+          'BOOTSTRAP_LP_MUSD',
+          symbol,
+          'BOOTSTRAP_LP_TARGET_MUSD_AMOUNT',
+          defaultLpMusdAmount(symbol)
+        );
+
+        const lpTokenRaw = ethers.parseUnits(lpTokenAmount, decimals);
+        const lpMusdRaw = ethers.parseEther(lpMusdAmount);
+
+        const canProvideToken = await ensureTokenBalance(tokenAddress, deployer.address, lpTokenRaw, symbol, decimals);
+        if (!canProvideToken) {
+          console.log(`skip LP for ${symbol}: token balance is insufficient`);
+          continue;
+        }
+
+        const canTopUpMusd = await ensureMusdBalance(lpMusdRaw);
+        const musdBalance = await musd.balanceOf(deployer.address);
+        if (!canTopUpMusd || musdBalance < lpMusdRaw) {
+          console.log(
+            `skip LP for ${symbol}: mUSD balance insufficient required=${ethers.formatEther(lpMusdRaw)} available=${ethers.formatEther(
+              musdBalance
+            )}`
+          );
+          continue;
+        }
+
+        await (await token.approve(await router.getAddress(), lpTokenRaw)).wait();
+        await (await musd.approve(await router.getAddress(), lpMusdRaw)).wait();
+
+        const minToken = (lpTokenRaw * 99n) / 100n;
+        const minMusd = (lpMusdRaw * 99n) / 100n;
+
+        await (
+          await router.addLiquidity(
+            await musd.getAddress(),
+            tokenAddress,
+            lpMusdRaw,
+            lpTokenRaw,
+            minMusd,
+            minToken,
+            deployer.address,
+            deadline
+          )
+        ).wait();
+
+        const pair = await factory.getPair(await musd.getAddress(), tokenAddress);
+        createdPools.push({ symbol, token: tokenAddress, pair });
+        handledTokenAddresses.add(tokenAddress);
+        existingTokenBySymbol.set(symbol, tokenAddress);
+        console.log(`added LP (registry-mode): ${symbol} pair=${pair}`);
+      } catch (error) {
+        console.log(`skip registry token ${tokenAddress}`);
+        console.log(String(error));
+      }
+    }
+  }
+
+  persistTargetRegistry(registryPath, registry, createdPools);
 
   const musdBalance = await musd.balanceOf(deployer.address);
 

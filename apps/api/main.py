@@ -147,7 +147,8 @@ async def quote(
 @app.get('/pairs')
 async def pairs(
     chain_id: int | None = Query(default=None, gt=0),
-    limit: int = Query(default=100, ge=1, le=1000)
+    limit: int = Query(default=100, ge=1, le=1000),
+    dedupe_symbols: bool = Query(default=True)
 ) -> dict:
     assert _pg_pool is not None
     registry = load_chain_registry()
@@ -281,6 +282,24 @@ async def pairs(
         ),
         reverse=True
     )
+
+    if dedupe_symbols:
+        deduped_rows: list[dict] = []
+        seen_keys: set[str] = set()
+        for row in merged:
+            token0 = str(row.get('token0_symbol', '')).strip().upper()
+            token1 = str(row.get('token1_symbol', '')).strip().upper()
+            if token0 and token1:
+                ordered = tuple(sorted([token0, token1]))
+                key = f"{int(row.get('chain_id', 0))}:{ordered[0]}:{ordered[1]}"
+            else:
+                key = f"{int(row.get('chain_id', 0))}:pool:{str(row.get('pool_address', '')).lower()}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped_rows.append(row)
+        merged = deduped_rows
+
     return {'rows': merged[:limit]}
 
 
