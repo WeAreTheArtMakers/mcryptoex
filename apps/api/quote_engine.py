@@ -271,8 +271,11 @@ def build_quote(
         allow_static = _allow_static_fallback_global or chain_id == 31337
         if not allow_static:
             raise QuoteEngineError(
-                404,
-                f'no on-chain liquidity route for {canonical_in}->{canonical_out} on chain_id={chain_id}'
+                422,
+                (
+                    f'no on-chain liquidity route for {canonical_in}->{canonical_out} on chain_id={chain_id}. '
+                    'deploy router/factory + bootstrap pool liquidity for this pair first'
+                )
             )
         liquidity_source = 'static-fallback'
         expected_out = _legacy_amount(canonical_in, canonical_out, amount_in)

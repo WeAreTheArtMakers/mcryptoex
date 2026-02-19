@@ -7,6 +7,8 @@ import { WagmiProvider, createConfig } from 'wagmi';
 import { bscTestnet, sepolia } from 'wagmi/chains';
 import { injected, walletConnect } from 'wagmi/connectors';
 
+const localChainEnabled = process.env.NEXT_PUBLIC_ENABLE_LOCAL_CHAIN === 'true';
+
 const hardhatLocal = defineChain({
   id: 31337,
   name: 'Hardhat Local',
@@ -41,7 +43,7 @@ if (walletConnectProjectId) {
   );
 }
 
-const chains = [hardhatLocal, sepolia, bscTestnet] as const;
+const chains = localChainEnabled ? ([hardhatLocal, sepolia, bscTestnet] as const) : ([sepolia, bscTestnet] as const);
 
 const config = createConfig({
   chains,

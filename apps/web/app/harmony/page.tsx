@@ -91,15 +91,20 @@ type RiskAssumptionsResponse = {
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_TEMPO_API_BASE || 'http://localhost:8500';
+const LOCAL_CHAIN_ENABLED = process.env.NEXT_PUBLIC_ENABLE_LOCAL_CHAIN === 'true';
+const ENV_DEFAULT_CHAIN_ID = Number(process.env.NEXT_PUBLIC_DEFAULT_CHAIN_ID || (LOCAL_CHAIN_ENABLED ? '31337' : '11155111'));
+const DEFAULT_CHAIN_ID = Number.isFinite(ENV_DEFAULT_CHAIN_ID) ? ENV_DEFAULT_CHAIN_ID : LOCAL_CHAIN_ENABLED ? 31337 : 11155111;
 const DEFAULT_TOKENS: TokenItem[] = [
   { symbol: 'mUSD', name: 'Musical USD', address: 'local-musd', decimals: 18 },
   { symbol: 'WETH', name: 'Wrapped Ether', address: 'local-weth', decimals: 18 }
 ];
-const DEFAULT_NETWORKS: NetworkItem[] = [
-  { chain_id: 31337, chain_key: 'hardhat-local', name: 'Hardhat Local', network: 'hardhat', token_count: 2 },
+const DEFAULT_NETWORKS_BASE: NetworkItem[] = [
   { chain_id: 11155111, chain_key: 'ethereum-sepolia', name: 'Ethereum Sepolia', network: 'sepolia', token_count: 2 },
   { chain_id: 97, chain_key: 'bnb-testnet', name: 'BNB Testnet', network: 'bscTestnet', token_count: 2 }
 ];
+const DEFAULT_NETWORKS: NetworkItem[] = LOCAL_CHAIN_ENABLED
+  ? [{ chain_id: 31337, chain_key: 'hardhat-local', name: 'Hardhat Local', network: 'hardhat', token_count: 2 }, ...DEFAULT_NETWORKS_BASE]
+  : DEFAULT_NETWORKS_BASE;
 
 function extractErrorMessage(defaultPrefix: string, status: number, body: unknown): string {
   if (body && typeof body === 'object') {
@@ -120,7 +125,7 @@ function shortAmount(value: string): string {
 }
 
 export default function HarmonyPage() {
-  const [chainId, setChainId] = useState<number>(31337);
+  const [chainId, setChainId] = useState<number>(DEFAULT_CHAIN_ID);
   const [tokensByChain, setTokensByChain] = useState<Record<string, TokenItem[]>>({});
   const [networks, setNetworks] = useState<NetworkItem[]>(DEFAULT_NETWORKS);
   const [tokenIn, setTokenIn] = useState<string>('WETH');
@@ -148,6 +153,16 @@ export default function HarmonyPage() {
     () => networkOptions.find((network) => network.chain_id === chainId),
     [networkOptions, chainId]
   );
+
+  useEffect(() => {
+    if (networkOptions.some((network) => network.chain_id === chainId)) {
+      return;
+    }
+    const fallback = networkOptions.find((network) => network.chain_id === DEFAULT_CHAIN_ID) || networkOptions[0];
+    if (fallback) {
+      setChainId(fallback.chain_id);
+    }
+  }, [chainId, networkOptions]);
 
   const tokenBySymbolUpper = useMemo(() => {
     const map = new Map<string, TokenItem>();

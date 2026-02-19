@@ -70,4 +70,5 @@ class QuoteEndpointTests(unittest.TestCase):
                 amount_in=Decimal('1'),
                 slippage_bps=100
             )
-        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertIn('bootstrap pool liquidity', str(ctx.exception))
