@@ -961,6 +961,12 @@ export default function ExchangePage() {
                 >
                   Execute Market Swap
                 </button>
+                <a
+                  href="/liquidity"
+                  className="rounded-lg border border-brass/65 bg-brass/20 px-4 py-2 text-sm font-semibold text-amber-100"
+                >
+                  Deposit (LP)
+                </a>
                 {canPromptSwitch ? (
                   <button
                     type="button"
