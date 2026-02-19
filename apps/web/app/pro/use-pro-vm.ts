@@ -99,6 +99,7 @@ type AnalyticsResponse = {
 type LedgerEntry = {
   tx_hash: string;
   chain_id: number;
+  pool_address?: string | null;
   entry_type: string;
   side: string;
   asset: string;
@@ -131,6 +132,7 @@ export type MarketRow = {
 
 export type TradeRow = {
   txHash: string;
+  poolAddress: string;
   at: string;
   side: 'buy' | 'sell';
   baseToken: string;
@@ -168,6 +170,18 @@ export type ChartPoint = {
   price: number | null;
   volume: number;
   fees: number;
+};
+
+export type OhlcCandle = {
+  bucket: number;
+  label: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  fees: number;
+  tradeCount: number;
 };
 
 export type Timeframe = '1m' | '5m' | '1h' | '1d';
@@ -265,28 +279,206 @@ function timeframeWindowMinutes(timeframe: Timeframe): number {
   return 30 * 24 * 60;
 }
 
-function parseMarketRows(pairs: PairRow[], chainId: number): MarketRow[] {
+type PairStats = {
+  lastPrice: number | null;
+  change24h: number | null;
+  volume24h: number;
+  lastSwapAt: string | null;
+};
+
+type SwapExecution = {
+  txHash: string;
+  poolAddress: string;
+  at: string;
+  inAsset?: string;
+  outAsset?: string;
+  inAmount: number;
+  outAmount: number;
+  feeUsd: number;
+  gasUsd: number;
+  amounts: Record<string, number>;
+};
+
+function parseSwapExecutions(rows: LedgerEntry[]): SwapExecution[] {
+  const grouped = new Map<
+    string,
+    {
+      txHash: string;
+      poolAddress: string;
+      at: string;
+      inAsset?: string;
+      outAsset?: string;
+      inAmount: number;
+      outAmount: number;
+      feeUsd: number;
+      gasUsd: number;
+      amounts: Record<string, number>;
+    }
+  >();
+
+  for (const row of rows) {
+    if (!row.tx_hash || !row.entry_type.startsWith('swap_notional_')) continue;
+    const poolAddress = String(row.pool_address || '').toLowerCase();
+    if (!poolAddress) continue;
+    const key = `${row.tx_hash.toLowerCase()}::${poolAddress}`;
+
+    const current = grouped.get(key) || {
+      txHash: row.tx_hash.toLowerCase(),
+      poolAddress,
+      at: row.occurred_at,
+      inAmount: 0,
+      outAmount: 0,
+      feeUsd: 0,
+      gasUsd: 0,
+      amounts: {}
+    };
+
+    const asset = normalizeSymbol(row.asset || '');
+    const amount = Math.abs(n(row.amount));
+    if (asset) {
+      current.amounts[asset] = Math.max(current.amounts[asset] || 0, amount);
+    }
+
+    current.feeUsd = Math.max(current.feeUsd, n(row.fee_usd));
+    current.gasUsd = Math.max(current.gasUsd, n(row.gas_cost_usd));
+    if (new Date(row.occurred_at).getTime() > new Date(current.at).getTime()) {
+      current.at = row.occurred_at;
+    }
+
+    if (row.entry_type === 'swap_notional_in' && amount > current.inAmount) {
+      current.inAmount = amount;
+      current.inAsset = asset;
+    }
+    if (row.entry_type === 'swap_notional_out' && amount > current.outAmount) {
+      current.outAmount = amount;
+      current.outAsset = asset;
+    }
+
+    grouped.set(key, current);
+  }
+
+  return Array.from(grouped.values()).sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+}
+
+function computePairStatsMap(pairs: PairRow[], chainId: number, ledgerRows: LedgerEntry[]): Map<string, PairStats> {
+  const filteredPairs = pairs.filter((pair) => Number(pair.chain_id) === chainId);
+  const pairByPool = new Map<
+    string,
+    {
+      id: string;
+      token0: string;
+      token1: string;
+      reserve0: number;
+      reserve1: number;
+      fallbackVolume: number;
+      fallbackLastSwapAt: string | null;
+    }
+  >();
+
+  for (const pair of filteredPairs) {
+    const id = `${pair.chain_id}:${pair.pool_address}`;
+    pairByPool.set(pair.pool_address.toLowerCase(), {
+      id,
+      token0: normalizeSymbol(pair.token0_symbol),
+      token1: normalizeSymbol(pair.token1_symbol),
+      reserve0: n(pair.reserve0_decimal),
+      reserve1: n(pair.reserve1_decimal),
+      fallbackVolume: n(pair.total_amount_in),
+      fallbackLastSwapAt: pair.last_swap_at || null
+    });
+  }
+
+  const historyByPair = new Map<
+    string,
+    Array<{
+      at: number;
+      price: number;
+      quoteVolume: number;
+    }>
+  >();
+
+  const executions = parseSwapExecutions(ledgerRows);
+  for (const execution of executions) {
+    const pair = pairByPool.get(execution.poolAddress);
+    if (!pair) continue;
+
+    const amountBase = execution.amounts[pair.token0] || 0;
+    const amountQuote = execution.amounts[pair.token1] || 0;
+    if (amountBase <= 0 || amountQuote <= 0) continue;
+
+    const price = amountQuote / amountBase;
+    if (!Number.isFinite(price) || price <= 0) continue;
+
+    const at = new Date(execution.at).getTime();
+    const history = historyByPair.get(pair.id) || [];
+    history.push({
+      at: Number.isFinite(at) ? at : 0,
+      price,
+      quoteVolume: amountQuote
+    });
+    historyByPair.set(pair.id, history);
+  }
+
+  const since24h = Date.now() - 24 * 60 * 60 * 1000;
+  const stats = new Map<string, PairStats>();
+
+  for (const pair of pairByPool.values()) {
+    const history = (historyByPair.get(pair.id) || []).sort((a, b) => a.at - b.at);
+    const reservePrice = pair.reserve0 > 0 ? pair.reserve1 / pair.reserve0 : null;
+
+    if (!history.length) {
+      stats.set(pair.id, {
+        lastPrice: reservePrice,
+        change24h: null,
+        volume24h: pair.fallbackVolume,
+        lastSwapAt: pair.fallbackLastSwapAt
+      });
+      continue;
+    }
+
+    const last = history[history.length - 1];
+    const last24h = history.filter((item) => item.at >= since24h);
+    const first24h = last24h.length ? last24h[0] : null;
+    const final24h = last24h.length ? last24h[last24h.length - 1] : null;
+    const change24h =
+      first24h && final24h && first24h.price > 0 ? ((final24h.price - first24h.price) / first24h.price) * 100 : null;
+    const volume24h = last24h.reduce((sum, item) => sum + item.quoteVolume, 0);
+
+    stats.set(pair.id, {
+      lastPrice: last.price,
+      change24h,
+      volume24h,
+      lastSwapAt: new Date(last.at).toISOString()
+    });
+  }
+
+  return stats;
+}
+
+function parseMarketRows(pairs: PairRow[], chainId: number, pairStats: Map<string, PairStats>): MarketRow[] {
   return pairs
     .filter((pair) => Number(pair.chain_id) === chainId)
     .map((pair) => {
+      const id = `${pair.chain_id}:${pair.pool_address}`;
       const reserve0 = n(pair.reserve0_decimal);
       const reserve1 = n(pair.reserve1_decimal);
-      const last = reserve0 > 0 ? reserve1 / reserve0 : null;
+      const fallbackLast = reserve0 > 0 ? reserve1 / reserve0 : null;
+      const stats = pairStats.get(id);
       return {
-        id: `${pair.chain_id}:${pair.pool_address}`,
+        id,
         chainId: pair.chain_id,
         pair: tokenPairKey(pair.token0_symbol, pair.token1_symbol),
         token0: normalizeSymbol(pair.token0_symbol),
         token1: normalizeSymbol(pair.token1_symbol),
-        last,
-        change24h: null,
-        volume24h: n(pair.total_amount_in),
+        last: stats?.lastPrice ?? fallbackLast,
+        change24h: stats?.change24h ?? null,
+        volume24h: stats?.volume24h ?? n(pair.total_amount_in),
         poolAddress: pair.pool_address,
         swaps: n(pair.swaps),
         reserve0,
         reserve1,
         totalFeeUsd: n(pair.total_fee_usd),
-        lastSwapAt: pair.last_swap_at
+        lastSwapAt: stats?.lastSwapAt ?? pair.last_swap_at ?? null
       };
     })
     .sort((a, b) => {
@@ -297,167 +489,96 @@ function parseMarketRows(pairs: PairRow[], chainId: number): MarketRow[] {
 }
 
 function parseTrades(rows: LedgerEntry[], selectedPair?: MarketRow | null): TradeRow[] {
-  const byTx = new Map<
-    string,
-    {
-      at: string;
-      inAsset?: string;
-      outAsset?: string;
-      inAmount: number;
-      outAmount: number;
-      feeUsd: number;
-      gasUsd: number;
-    }
-  >();
-
-  for (const row of rows) {
-    if (!row.tx_hash || !row.entry_type.startsWith('swap_notional_')) continue;
-    const key = row.tx_hash.toLowerCase();
-    const current = byTx.get(key) || {
-      at: row.occurred_at,
-      inAmount: 0,
-      outAmount: 0,
-      feeUsd: 0,
-      gasUsd: 0
-    };
-
-    const asset = normalizeSymbol(row.asset || '');
-    const amount = Math.abs(n(row.amount));
-    current.feeUsd = Math.max(current.feeUsd, n(row.fee_usd));
-    current.gasUsd = Math.max(current.gasUsd, n(row.gas_cost_usd));
-    if (new Date(row.occurred_at).getTime() > new Date(current.at).getTime()) {
-      current.at = row.occurred_at;
-    }
-
-    if (row.entry_type === 'swap_notional_in') {
-      if (amount > current.inAmount) {
-        current.inAmount = amount;
-        current.inAsset = asset;
-      }
-    }
-    if (row.entry_type === 'swap_notional_out') {
-      if (amount > current.outAmount) {
-        current.outAmount = amount;
-        current.outAsset = asset;
-      }
-    }
-    byTx.set(key, current);
-  }
-
+  if (!selectedPair) return [];
+  const executions = parseSwapExecutions(rows);
   const trades: TradeRow[] = [];
-  for (const [txHash, item] of byTx.entries()) {
-    if (!item.inAsset || !item.outAsset || item.inAmount <= 0 || item.outAmount <= 0) continue;
 
-    if (selectedPair) {
-      const base = selectedPair.token0;
-      const quote = selectedPair.token1;
-      const inAsset = item.inAsset;
-      const outAsset = item.outAsset;
-      if (
-        !(
-          (inAsset === base && outAsset === quote) ||
-          (inAsset === quote && outAsset === base)
-        )
-      ) {
-        continue;
-      }
+  const selectedPoolAddress = selectedPair.poolAddress.toLowerCase();
+  const base = selectedPair.token0;
+  const quote = selectedPair.token1;
 
-      const side: 'buy' | 'sell' = inAsset === quote ? 'buy' : 'sell';
-      const baseAmount = inAsset === base ? item.inAmount : item.outAmount;
-      const quoteAmount = inAsset === quote ? item.inAmount : item.outAmount;
-      const price = baseAmount > 0 ? quoteAmount / baseAmount : 0;
-      trades.push({
-        txHash,
-        at: item.at,
-        side,
-        baseToken: base,
-        quoteToken: quote,
-        baseAmount,
-        quoteAmount,
-        price,
-        feeUsd: item.feeUsd,
-        gasUsd: item.gasUsd
-      });
+  for (const item of executions) {
+    if (item.poolAddress !== selectedPoolAddress) continue;
+
+    const baseAmountFromAssets = item.amounts[base] || 0;
+    const quoteAmountFromAssets = item.amounts[quote] || 0;
+    if (baseAmountFromAssets <= 0 || quoteAmountFromAssets <= 0) continue;
+
+    let side: 'buy' | 'sell' = 'buy';
+    if (item.inAsset === base && item.outAsset === quote) {
+      side = 'sell';
+    } else if (item.inAsset === quote && item.outAsset === base) {
+      side = 'buy';
+    } else if (item.outAsset === quote) {
+      side = 'sell';
+    } else if (item.outAsset === base) {
+      side = 'buy';
     }
+
+    const price = quoteAmountFromAssets / baseAmountFromAssets;
+    trades.push({
+      txHash: item.txHash,
+      poolAddress: item.poolAddress,
+      at: item.at,
+      side,
+      baseToken: base,
+      quoteToken: quote,
+      baseAmount: baseAmountFromAssets,
+      quoteAmount: quoteAmountFromAssets,
+      price,
+      feeUsd: item.feeUsd,
+      gasUsd: item.gasUsd
+    });
   }
 
   return trades.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 }
 
-function computeChartPoints(
-  trades: TradeRow[],
-  analytics: AnalyticsResponse | null,
-  chainId: number,
-  selectedPair: MarketRow | null,
-  timeframe: Timeframe
-): ChartPoint[] {
-  const points = new Map<number, ChartPoint>();
+function computeOhlcCandles(trades: TradeRow[], timeframe: Timeframe): OhlcCandle[] {
+  const buckets = new Map<number, OhlcCandle>();
+  const ascending = [...trades].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
 
-  for (const trade of trades) {
+  for (const trade of ascending) {
+    if (!Number.isFinite(trade.price) || trade.price <= 0) continue;
     const bucket = roundBucket(new Date(trade.at), timeframe);
-    const current = points.get(bucket) || {
+    const current = buckets.get(bucket) || {
+      bucket,
       label: formatBucket(bucket, timeframe),
-      price: null,
+      open: trade.price,
+      high: trade.price,
+      low: trade.price,
+      close: trade.price,
       volume: 0,
-      fees: 0
+      fees: 0,
+      tradeCount: 0
     };
 
-    current.volume += trade.baseAmount;
+    current.high = Math.max(current.high, trade.price);
+    current.low = Math.min(current.low, trade.price);
+    current.close = trade.price;
+    current.volume += trade.quoteAmount;
     current.fees += trade.feeUsd;
-    current.price = trade.price;
-    points.set(bucket, current);
+    current.tradeCount += 1;
+    buckets.set(bucket, current);
   }
 
-  if (analytics && selectedPair) {
-    for (const row of analytics.volume_by_chain_token || []) {
-      if (Number(row.chain_id) !== chainId) continue;
-      const asset = normalizeSymbol(String(row.asset || ''));
-      if (asset !== selectedPair.token0 && asset !== selectedPair.token1) continue;
-      const bucket = roundBucket(new Date(row.bucket), timeframe);
-      const current = points.get(bucket) || {
-        label: formatBucket(bucket, timeframe),
-        price: null,
-        volume: 0,
-        fees: 0
-      };
-      current.volume += n(row.volume);
-      points.set(bucket, current);
-    }
+  return Array.from(buckets.values())
+    .sort((a, b) => a.bucket - b.bucket)
+    .slice(-180);
+}
 
-    for (const row of analytics.fee_revenue || []) {
-      if (Number(row.chain_id) !== chainId) continue;
-      const bucket = roundBucket(new Date(row.bucket), timeframe);
-      const current = points.get(bucket) || {
-        label: formatBucket(bucket, timeframe),
-        price: null,
-        volume: 0,
-        fees: 0
-      };
-      current.fees += n(row.revenue_usd);
-      points.set(bucket, current);
-    }
-  }
-
-  const ordered = Array.from(points.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([, value]) => value);
-
-  let lastPrice = 0;
-  for (const point of ordered) {
-    if (point.price && point.price > 0) {
-      lastPrice = point.price;
-      continue;
-    }
-    if (lastPrice > 0) {
-      point.price = lastPrice;
-    }
-  }
-
-  return ordered.slice(-120);
+function computeChartPoints(candles: OhlcCandle[]): ChartPoint[] {
+  return candles.map((candle) => ({
+    label: candle.label,
+    price: candle.close,
+    volume: candle.volume,
+    fees: candle.fees
+  }));
 }
 
 export function useMarketListVM(chainId: number, searchQuery: string, filter: 'all' | 'favorites' | 'spot', favorites: string[]) {
   const [pairs, setPairs] = useState<PairRow[]>([]);
+  const [ledgerRows, setLedgerRows] = useState<LedgerEntry[]>([]);
   const [tokensByChain, setTokensByChain] = useState<Record<string, TokenItem[]>>({});
   const [networks, setNetworks] = useState<NetworkItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -470,14 +591,16 @@ export function useMarketListVM(chainId: number, searchQuery: string, filter: 'a
       setLoading(true);
       setError('');
       try {
-        const [pairsPayload, tokensPayloadData] = await Promise.all([
+        const [pairsPayload, tokensPayloadData, ledgerPayload] = await Promise.all([
           fetchJson<PairsResponse>(`/pairs?chain_id=${chainId}&limit=250`),
-          fetchJson<TokensResponse>('/tokens')
+          fetchJson<TokensResponse>('/tokens'),
+          fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=2000`)
         ]);
         if (!active) return;
         setPairs(pairsPayload.rows || []);
         setTokensByChain(tokensPayloadData.chains || {});
         setNetworks(tokensPayloadData.networks || []);
+        setLedgerRows(ledgerPayload.rows || []);
       } catch (err) {
         if (!active) return;
         const message = err instanceof Error ? err.message : 'failed to load markets';
@@ -495,7 +618,8 @@ export function useMarketListVM(chainId: number, searchQuery: string, filter: 'a
     };
   }, [chainId]);
 
-  const marketRows = useMemo(() => parseMarketRows(pairs, chainId), [pairs, chainId]);
+  const pairStats = useMemo(() => computePairStatsMap(pairs, chainId, ledgerRows), [chainId, ledgerRows, pairs]);
+  const marketRows = useMemo(() => parseMarketRows(pairs, chainId, pairStats), [pairs, chainId, pairStats]);
 
   const filteredRows = useMemo(() => {
     const query = searchQuery.trim().toUpperCase();
@@ -547,7 +671,7 @@ export function useTradesVM(chainId: number, selectedPair: MarketRow | null) {
       setLoading(true);
       setError('');
       try {
-        const payload = await fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=500`);
+        const payload = await fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=2000`);
         if (!active) return;
         setTrades(parseTrades(payload.rows || [], selectedPair));
       } catch (err) {
@@ -609,14 +733,15 @@ export function usePairVM(params: {
     };
   }, [timeframe]);
 
+  const ohlcCandles = useMemo(() => computeOhlcCandles(trades, timeframe), [timeframe, trades]);
   const chartPoints = useMemo(
-    () => computeChartPoints(trades, analytics, chainId, selectedPair, timeframe),
-    [analytics, chainId, selectedPair, timeframe, trades]
+    () => computeChartPoints(ohlcCandles),
+    [ohlcCandles]
   );
 
   const metrics = useMemo(() => {
     const lastTrade = trades[0] || null;
-    const lastPrice = lastTrade?.price || selectedPair?.last || 0;
+    const lastPrice = lastTrade?.price || ohlcCandles[ohlcCandles.length - 1]?.close || selectedPair?.last || 0;
 
     const since = Date.now() - 24 * 60 * 60 * 1000;
     const trades24h = trades.filter((trade) => new Date(trade.at).getTime() >= since);
@@ -624,19 +749,37 @@ export function usePairVM(params: {
     const fees24h = trades24h.reduce((sum, trade) => sum + trade.feeUsd, 0);
 
     const oldest = trades24h.length ? trades24h[trades24h.length - 1] : null;
-    const change24h = oldest && oldest.price > 0 ? ((lastPrice - oldest.price) / oldest.price) * 100 : null;
+    const change24h =
+      oldest && oldest.price > 0
+        ? ((lastPrice - oldest.price) / oldest.price) * 100
+        : selectedPair?.change24h ?? null;
+
+    let fallbackVolume24h = volume24h;
+    if (fallbackVolume24h <= 0 && analytics) {
+      fallbackVolume24h = analytics.volume_by_chain_token
+        .filter((row) => Number(row.chain_id) === chainId)
+        .reduce((sum, row) => sum + n(row.volume), 0);
+    }
+
+    let fallbackFees24h = fees24h;
+    if (fallbackFees24h <= 0 && analytics) {
+      fallbackFees24h = analytics.fee_revenue
+        .filter((row) => Number(row.chain_id) === chainId)
+        .reduce((sum, row) => sum + n(row.revenue_usd), 0);
+    }
 
     return {
       lastPrice,
       change24h,
-      volume24h,
-      fees24h
+      volume24h: fallbackVolume24h,
+      fees24h: fallbackFees24h
     };
-  }, [selectedPair, trades]);
+  }, [analytics, chainId, ohlcCandles, selectedPair, trades]);
 
   return {
     loading,
     error,
+    ohlcCandles,
     chartPoints,
     metrics
   };
