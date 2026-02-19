@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "generated_at": "2026-02-19T05:25:12.011365+00:00",
+  "version": 3,
+  "generated_at": "2026-02-19T06:25:57.723418+00:00",
   "source": "packages/contracts/deploy/address-registry.*.json + live-rpc-pair-discovery",
   "chains": [
     {
@@ -11,19 +11,24 @@
       "rpc_env_key": "INDEXER_HARDHAT_RPC_URL",
       "default_rpc_url": "http://host.docker.internal:8545",
       "amm": {
-        "swap_fee_bps": 30
+        "swap_fee_bps": 30,
+        "protocol_fee_bps": 5
       },
       "contracts": {
         "musd": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
         "stabilizer": "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
         "oracle": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
         "harmony_factory": "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
-        "harmony_router": "0x610178dA211FEF7D417bC0e6FeD39F05609AD788"
+        "harmony_router": "0x610178dA211FEF7D417bC0e6FeD39F05609AD788",
+        "resonance_vault": "0xA51c1fc2f0D1a1b8494Ed1FE312d7C3a78Ed91C0"
       },
       "indexer": {
         "pair_addresses": [],
         "stabilizer_addresses": [
           "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
+        ],
+        "vault_addresses": [
+          "0xA51c1fc2f0D1a1b8494Ed1FE312d7C3a78Ed91C0"
         ],
         "start_block": "latest",
         "confirmation_depth": 0
@@ -32,7 +37,7 @@
       "network_health": {
         "rpc_connected": false,
         "latest_block": null,
-        "checked_at": "2026-02-19T05:25:12.011365+00:00",
+        "checked_at": "2026-02-19T06:25:57.723418+00:00",
         "discovery_status": "error: rpc call failed via urllib and curl: HTTP Error 502: Bad Gateway; curl=curl: (6) Could not resolve host: host.docker.internal"
       },
       "tokens": [
@@ -80,7 +85,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -90,7 +95,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -100,7 +105,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -116,26 +121,29 @@
       "rpc_env_key": "SEPOLIA_RPC_URL",
       "default_rpc_url": "https://ethereum-sepolia-rpc.publicnode.com",
       "amm": {
-        "swap_fee_bps": 30
+        "swap_fee_bps": 30,
+        "protocol_fee_bps": 5
       },
       "contracts": {
         "musd": "",
         "stabilizer": "",
         "oracle": "",
         "harmony_factory": "",
-        "harmony_router": ""
+        "harmony_router": "",
+        "resonance_vault": ""
       },
       "indexer": {
         "pair_addresses": [],
         "stabilizer_addresses": [],
+        "vault_addresses": [],
         "start_block": "latest",
         "confirmation_depth": 2
       },
       "pairs": [],
       "network_health": {
         "rpc_connected": true,
-        "latest_block": 10290642,
-        "checked_at": "2026-02-19T05:25:12.011365+00:00",
+        "latest_block": 10290925,
+        "checked_at": "2026-02-19T06:25:57.723418+00:00",
         "discovery_status": "factory-not-configured"
       },
       "tokens": [
@@ -176,7 +184,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -186,7 +194,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -196,7 +204,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -212,26 +220,29 @@
       "rpc_env_key": "BSC_TESTNET_RPC_URL",
       "default_rpc_url": "https://bsc-testnet-rpc.publicnode.com",
       "amm": {
-        "swap_fee_bps": 30
+        "swap_fee_bps": 30,
+        "protocol_fee_bps": 5
       },
       "contracts": {
         "musd": "",
         "stabilizer": "",
         "oracle": "",
         "harmony_factory": "",
-        "harmony_router": ""
+        "harmony_router": "",
+        "resonance_vault": ""
       },
       "indexer": {
         "pair_addresses": [],
         "stabilizer_addresses": [],
+        "vault_addresses": [],
         "start_block": "latest",
         "confirmation_depth": 3
       },
       "pairs": [],
       "network_health": {
         "rpc_connected": true,
-        "latest_block": 91209514,
-        "checked_at": "2026-02-19T05:25:12.011365+00:00",
+        "latest_block": 91217610,
+        "checked_at": "2026-02-19T06:25:57.723418+00:00",
         "discovery_status": "factory-not-configured"
       },
       "tokens": [
@@ -272,7 +283,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -282,7 +293,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -292,7 +303,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T05:25:12.011365+00:00",
+          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],

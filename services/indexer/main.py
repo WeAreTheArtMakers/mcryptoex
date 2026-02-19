@@ -66,6 +66,7 @@ class Settings:
     rpc_url: str
     pair_addresses: list[str]
     stabilizer_addresses: list[str]
+    vault_addresses: list[str]
     poll_interval_seconds: int
     start_block: int | None
     confirmation_depth: int
@@ -77,6 +78,7 @@ class Settings:
     registry_refresh_seconds: int
     pair_addresses_overridden: bool
     stabilizer_addresses_overridden: bool
+    vault_addresses_overridden: bool
 
 
 @dataclass
@@ -184,6 +186,7 @@ def _settings_from_env() -> Settings:
 
     registry_pairs = _registry_addresses(chain_from_registry, 'pair_addresses')
     registry_stabilizers = _registry_addresses(chain_from_registry, 'stabilizer_addresses')
+    registry_vaults = _registry_addresses(chain_from_registry, 'vault_addresses')
 
     pair_override_raw = os.getenv('INDEXER_PAIR_ADDRESSES', '').strip()
     pair_addresses_overridden = bool(pair_override_raw)
@@ -198,6 +201,13 @@ def _settings_from_env() -> Settings:
     if not stabilizer_addresses_overridden and registry_stabilizers:
         stabilizer_addresses = registry_stabilizers
     stabilizer_addresses = _normalize_addresses(stabilizer_addresses)
+
+    vault_override_raw = os.getenv('INDEXER_VAULT_ADDRESSES', '').strip()
+    vault_addresses_overridden = bool(vault_override_raw)
+    vault_addresses = _csv_env('INDEXER_VAULT_ADDRESSES')
+    if not vault_addresses_overridden and registry_vaults:
+        vault_addresses = registry_vaults
+    vault_addresses = _normalize_addresses(vault_addresses)
 
     confirmation_depth_default = 0
     if isinstance(indexer_cfg, dict):
@@ -215,6 +225,7 @@ def _settings_from_env() -> Settings:
         rpc_url=rpc_url,
         pair_addresses=pair_addresses,
         stabilizer_addresses=stabilizer_addresses,
+        vault_addresses=vault_addresses,
         poll_interval_seconds=int(os.getenv('INDEXER_POLL_INTERVAL_SECONDS', '5')),
         start_block=start_block,
         confirmation_depth=int(os.getenv('INDEXER_CONFIRMATION_DEPTH', str(confirmation_depth_default))),
@@ -225,7 +236,8 @@ def _settings_from_env() -> Settings:
         simulation_interval_seconds=int(os.getenv('INDEXER_SIMULATION_INTERVAL_SECONDS', '20')),
         registry_refresh_seconds=int(os.getenv('INDEXER_REGISTRY_REFRESH_SECONDS', '30')),
         pair_addresses_overridden=pair_addresses_overridden,
-        stabilizer_addresses_overridden=stabilizer_addresses_overridden
+        stabilizer_addresses_overridden=stabilizer_addresses_overridden,
+        vault_addresses_overridden=vault_addresses_overridden
     )
 
 
@@ -268,12 +280,25 @@ class ChainIndexer:
         self.swap_topic = _hex_prefixed(Web3.keccak(text='Swap(address,uint256,uint256,uint256,uint256,address)'))
         self.mint_topic = _hex_prefixed(Web3.keccak(text='Mint(address,uint256,uint256)'))
         self.burn_topic = _hex_prefixed(Web3.keccak(text='Burn(address,uint256,uint256,address)'))
+        self.protocol_fee_accrued_topic = _hex_prefixed(
+            Web3.keccak(text='ProtocolFeeAccrued(address,address,uint256,address)')
+        )
         self.note_minted_topic = _hex_prefixed(
             Web3.keccak(text='NoteMinted(address,address,uint256,uint256,uint256,address)')
         )
         self.note_burned_topic = _hex_prefixed(
             Web3.keccak(text='NoteBurned(address,address,uint256,uint256,uint256,address)')
         )
+        self.fee_received_topic = _hex_prefixed(Web3.keccak(text='FeeReceived(address,uint256,address)'))
+        self.converted_topic = _hex_prefixed(
+            Web3.keccak(text='Converted(address,uint256,uint256,uint256,address[],address)')
+        )
+        self.distribution_executed_topic = _hex_prefixed(
+            Web3.keccak(text='DistributionExecuted(bytes32,address,uint256)')
+        )
+        self.bucket_ops_topic = _hex_prefixed(Web3.keccak(text='BUCKET_OPS'))
+        self.bucket_liquidity_topic = _hex_prefixed(Web3.keccak(text='BUCKET_LIQUIDITY'))
+        self.bucket_reserve_topic = _hex_prefixed(Web3.keccak(text='BUCKET_RESERVE'))
 
         self._pair_meta_cache: dict[str, PairMeta] = {}
         self._token_meta_cache: dict[str, tuple[str, int]] = {}
@@ -284,12 +309,13 @@ class ChainIndexer:
 
     def run(self) -> None:
         LOGGER.info(
-            'starting service=%s chain_key=%s chain_id=%s pair_count=%s stabilizer_count=%s',
+            'starting service=%s chain_key=%s chain_id=%s pair_count=%s stabilizer_count=%s vault_count=%s',
             self.settings.service_name,
             self.settings.chain_key,
             self.settings.chain_id,
             len(self.settings.pair_addresses),
-            len(self.settings.stabilizer_addresses)
+            len(self.settings.stabilizer_addresses),
+            len(self.settings.vault_addresses)
         )
 
         if self.settings.rpc_url:
@@ -314,7 +340,11 @@ class ChainIndexer:
             time.sleep(max(1, self.settings.poll_interval_seconds))
 
     def _refresh_registry_watchlists(self, force: bool = False) -> None:
-        if self.settings.pair_addresses_overridden and self.settings.stabilizer_addresses_overridden:
+        if (
+            self.settings.pair_addresses_overridden and
+            self.settings.stabilizer_addresses_overridden and
+            self.settings.vault_addresses_overridden
+        ):
             return
         if self.settings.registry_refresh_seconds <= 0 and not force:
             return
@@ -355,6 +385,17 @@ class ChainIndexer:
                 )
                 self.settings.stabilizer_addresses = registry_stabilizers
 
+        if not self.settings.vault_addresses_overridden:
+            registry_vaults = _normalize_addresses(_registry_addresses(chain_from_registry, 'vault_addresses'))
+            if registry_vaults != self.settings.vault_addresses:
+                LOGGER.info(
+                    'updating vault watchlist chain_key=%s old=%s new=%s',
+                    self.settings.chain_key,
+                    len(self.settings.vault_addresses),
+                    len(registry_vaults)
+                )
+                self.settings.vault_addresses = registry_vaults
+
     def _poll_chain_once(self) -> None:
         assert self.web3 is not None
 
@@ -377,6 +418,9 @@ class ChainIndexer:
         if self.settings.stabilizer_addresses:
             self._poll_stabilizer_events(from_block=from_block, to_block=to_block)
 
+        if self.settings.vault_addresses:
+            self._poll_vault_events(from_block=from_block, to_block=to_block)
+
         self.current_block = to_block + 1
 
     def _poll_pair_events(self, from_block: int, to_block: int) -> None:
@@ -387,7 +431,7 @@ class ChainIndexer:
                 'fromBlock': from_block,
                 'toBlock': to_block,
                 'address': [Web3.to_checksum_address(x) for x in self.settings.pair_addresses],
-                'topics': [[self.swap_topic, self.mint_topic, self.burn_topic]]
+                'topics': [[self.swap_topic, self.mint_topic, self.burn_topic, self.protocol_fee_accrued_topic]]
             }
         )
 
@@ -399,6 +443,8 @@ class ChainIndexer:
                 self._handle_liquidity_add_log(log)
             elif topic0 == self.burn_topic:
                 self._handle_liquidity_remove_log(log)
+            elif topic0 == self.protocol_fee_accrued_topic:
+                self._handle_protocol_fee_accrued_log(log)
 
     def _poll_stabilizer_events(self, from_block: int, to_block: int) -> None:
         assert self.web3 is not None
@@ -418,6 +464,27 @@ class ChainIndexer:
                 self._handle_musd_mint_log(log)
             elif topic0 == self.note_burned_topic:
                 self._handle_musd_burn_log(log)
+
+    def _poll_vault_events(self, from_block: int, to_block: int) -> None:
+        assert self.web3 is not None
+
+        logs = self.web3.eth.get_logs(
+            {
+                'fromBlock': from_block,
+                'toBlock': to_block,
+                'address': [Web3.to_checksum_address(x) for x in self.settings.vault_addresses],
+                'topics': [[self.fee_received_topic, self.converted_topic, self.distribution_executed_topic]]
+            }
+        )
+
+        for log in logs:
+            topic0 = _hex_prefixed(log['topics'][0])
+            if topic0 == self.fee_received_topic:
+                self._handle_fee_received_log(log)
+            elif topic0 == self.converted_topic:
+                self._handle_treasury_converted_log(log)
+            elif topic0 == self.distribution_executed_topic:
+                self._handle_distribution_log(log)
 
     def _maybe_emit_simulated_note(self) -> None:
         if not self.settings.enable_simulation:
@@ -448,6 +515,7 @@ class ChainIndexer:
             gas_used='117104',
             gas_cost_usd='0.22',
             protocol_revenue_usd='0.12',
+            min_out='0.029',
             block_number=0,
             source='indexer-simulation'
         )
@@ -513,6 +581,7 @@ class ChainIndexer:
             gas_used=gas_used,
             gas_cost_usd=gas_cost_usd,
             protocol_revenue_usd=format(protocol_revenue, 'f'),
+            min_out='0',
             occurred_at=block_ts,
             source='chain-indexer'
         )
@@ -541,6 +610,7 @@ class ChainIndexer:
             gas_used=gas_used,
             gas_cost_usd=gas_cost_usd,
             protocol_revenue_usd='0',
+            min_out='0',
             occurred_at=self._block_timestamp(log['blockNumber']),
             source='chain-indexer'
         )
@@ -569,6 +639,119 @@ class ChainIndexer:
             gas_used=gas_used,
             gas_cost_usd=gas_cost_usd,
             protocol_revenue_usd='0',
+            min_out='0',
+            occurred_at=self._block_timestamp(log['blockNumber']),
+            source='chain-indexer'
+        )
+
+    def _handle_protocol_fee_accrued_log(self, log: Any) -> None:
+        treasury_address = _topic_to_address(log['topics'][1])
+        token_address = _topic_to_address(log['topics'][2])
+        pair = _topic_to_address(log['topics'][3])
+        amount = decode(['uint256'], bytes(log['data']))[0]
+        token_symbol, token_decimals = self._token_meta(token_address)
+
+        self._publish_raw_note(
+            action='PROTOCOL_FEE_ACCRUED',
+            tx_hash=log['transactionHash'].hex(),
+            block_number=log['blockNumber'],
+            log_index=log['logIndex'],
+            user_address=treasury_address,
+            pool_address=pair,
+            token_in=token_symbol,
+            token_out='mUSD',
+            amount_in=_to_decimal_str(amount, token_decimals),
+            amount_out='0',
+            fee_usd='0',
+            gas_used='0',
+            gas_cost_usd='0',
+            protocol_revenue_usd='0',
+            min_out='0',
+            occurred_at=self._block_timestamp(log['blockNumber']),
+            source='chain-indexer'
+        )
+
+    def _handle_fee_received_log(self, log: Any) -> None:
+        token_address = _topic_to_address(log['topics'][1])
+        from_pair = _topic_to_address(log['topics'][2])
+        amount = decode(['uint256'], bytes(log['data']))[0]
+        token_symbol, token_decimals = self._token_meta(token_address)
+
+        self._publish_raw_note(
+            action='FEE_TRANSFERRED_TO_TREASURY',
+            tx_hash=log['transactionHash'].hex(),
+            block_number=log['blockNumber'],
+            log_index=log['logIndex'],
+            user_address=Web3.to_checksum_address(log['address']),
+            pool_address=from_pair,
+            token_in=token_symbol,
+            token_out='mUSD',
+            amount_in=_to_decimal_str(amount, token_decimals),
+            amount_out='0',
+            fee_usd='0',
+            gas_used='0',
+            gas_cost_usd='0',
+            protocol_revenue_usd='0',
+            min_out='0',
+            occurred_at=self._block_timestamp(log['blockNumber']),
+            source='chain-indexer'
+        )
+
+    def _handle_treasury_converted_log(self, log: Any) -> None:
+        token_in_address = _topic_to_address(log['topics'][1])
+        caller_address = _topic_to_address(log['topics'][2])
+        amount_in, min_out, musd_out, _path = decode(['uint256', 'uint256', 'uint256', 'address[]'], bytes(log['data']))
+
+        token_symbol, token_decimals = self._token_meta(token_in_address)
+        self._publish_raw_note(
+            action='TREASURY_CONVERTED_TO_MUSD',
+            tx_hash=log['transactionHash'].hex(),
+            block_number=log['blockNumber'],
+            log_index=log['logIndex'],
+            user_address=caller_address,
+            pool_address=Web3.to_checksum_address(log['address']),
+            token_in=token_symbol,
+            token_out='mUSD',
+            amount_in=_to_decimal_str(amount_in, token_decimals),
+            amount_out=_to_decimal_str(musd_out, 18),
+            fee_usd='0',
+            gas_used='0',
+            gas_cost_usd='0',
+            protocol_revenue_usd='0',
+            min_out=_to_decimal_str(min_out, 18),
+            occurred_at=self._block_timestamp(log['blockNumber']),
+            source='chain-indexer'
+        )
+
+    def _handle_distribution_log(self, log: Any) -> None:
+        bucket_topic = _hex_prefixed(log['topics'][1]).lower()
+        recipient = _topic_to_address(log['topics'][2])
+        amount = decode(['uint256'], bytes(log['data']))[0]
+
+        bucket = 'unknown'
+        if bucket_topic == self.bucket_ops_topic.lower():
+            bucket = 'opsBudget'
+        elif bucket_topic == self.bucket_liquidity_topic.lower():
+            bucket = 'liquidityIncentives'
+        elif bucket_topic == self.bucket_reserve_topic.lower():
+            bucket = 'reserveOrBuyback'
+
+        self._publish_raw_note(
+            action='DISTRIBUTION_EXECUTED',
+            tx_hash=log['transactionHash'].hex(),
+            block_number=log['blockNumber'],
+            log_index=log['logIndex'],
+            user_address=recipient,
+            pool_address=Web3.to_checksum_address(log['address']),
+            token_in='mUSD',
+            token_out=bucket,
+            amount_in=_to_decimal_str(amount, 18),
+            amount_out='0',
+            fee_usd='0',
+            gas_used='0',
+            gas_cost_usd='0',
+            protocol_revenue_usd='0',
+            min_out='0',
             occurred_at=self._block_timestamp(log['blockNumber']),
             source='chain-indexer'
         )
@@ -601,6 +784,7 @@ class ChainIndexer:
             gas_used=gas_used,
             gas_cost_usd=gas_cost_usd,
             protocol_revenue_usd='0',
+            min_out='0',
             occurred_at=self._block_timestamp(log['blockNumber']),
             source='chain-indexer'
         )
@@ -633,6 +817,7 @@ class ChainIndexer:
             gas_used=gas_used,
             gas_cost_usd=gas_cost_usd,
             protocol_revenue_usd='0',
+            min_out='0',
             occurred_at=self._block_timestamp(log['blockNumber']),
             source='chain-indexer'
         )
@@ -654,6 +839,7 @@ class ChainIndexer:
         gas_used: str,
         gas_cost_usd: str,
         protocol_revenue_usd: str,
+        min_out: str,
         occurred_at: datetime,
         source: str
     ) -> None:
@@ -677,6 +863,7 @@ class ChainIndexer:
             gas_used=gas_used,
             gas_cost_usd=gas_cost_usd,
             protocol_revenue_usd=protocol_revenue_usd,
+            min_out=min_out,
             block_number=block_number,
             source=source
         )

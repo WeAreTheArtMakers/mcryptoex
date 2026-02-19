@@ -56,6 +56,7 @@ class EmitSwapRequest(BaseModel):
     gas_used: str = '117104'
     gas_cost_usd: str = '0.22'
     protocol_revenue_usd: str = '0.12'
+    min_out: str = '0'
     block_number: int = 1
     action: str = 'SWAP'
 
@@ -240,14 +241,72 @@ async def analytics(minutes: int = Query(default=60, ge=1, le=1440)) -> dict:
         parameters={'minutes': minutes}
     )
 
+    fee_breakdown = _ch.query(
+        '''
+        SELECT
+          bucket,
+          chain_id,
+          pool_address,
+          token,
+          sum(fee_amount) AS fee_amount
+        FROM mcryptoex.dex_fee_breakdown_1m
+        WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
+        GROUP BY bucket, chain_id, pool_address, token
+        ORDER BY bucket ASC
+        ''',
+        parameters={'minutes': minutes}
+    )
+
+    musd_revenue_daily = _ch.query(
+        '''
+        SELECT
+          bucket,
+          chain_id,
+          sum(revenue_musd) AS revenue_musd
+        FROM mcryptoex.dex_protocol_revenue_musd_1d
+        WHERE bucket >= toDate(now() - toIntervalDay(30))
+        GROUP BY bucket, chain_id
+        ORDER BY bucket ASC
+        '''
+    )
+
+    conversion_slippage = _ch.query(
+        '''
+        SELECT
+          bucket,
+          chain_id,
+          (sum(slippage_numerator) / nullIf(sum(min_out_sum), 0)) * 10000 AS slippage_bps,
+          sum(conversion_count) AS conversions
+        FROM mcryptoex.dex_conversion_slippage_rollup_1m
+        WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
+        GROUP BY bucket, chain_id
+        ORDER BY bucket ASC
+        ''',
+        parameters={'minutes': minutes}
+    )
+
     def as_dicts(res):
-        return [dict(zip(res.column_names, row)) for row in res.result_rows]
+        payload = []
+        for row in res.result_rows:
+            item = {}
+            for key, value in zip(res.column_names, row):
+                if isinstance(value, Decimal):
+                    item[key] = str(value)
+                elif isinstance(value, datetime):
+                    item[key] = value.isoformat()
+                else:
+                    item[key] = value
+            payload.append(item)
+        return payload
 
     return {
         'minutes': minutes,
         'volume_by_chain_token': as_dicts(volume),
         'fee_revenue': as_dicts(fees),
-        'gas_cost_averages': as_dicts(gas)
+        'gas_cost_averages': as_dicts(gas),
+        'fee_breakdown_by_pool_token': as_dicts(fee_breakdown),
+        'protocol_revenue_musd_daily': as_dicts(musd_revenue_daily),
+        'conversion_slippage': as_dicts(conversion_slippage)
     }
 
 
@@ -275,6 +334,7 @@ async def emit_swap_note(req: EmitSwapRequest) -> dict:
         gas_used=req.gas_used,
         gas_cost_usd=req.gas_cost_usd,
         protocol_revenue_usd=req.protocol_revenue_usd,
+        min_out=req.min_out,
         block_number=req.block_number,
         source='tempo-api-debug'
     )

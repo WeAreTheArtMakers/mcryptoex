@@ -56,6 +56,13 @@ CHAIN_SPECS = [
 ]
 
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _is_evm_address(value: str) -> bool:
     return bool(re.fullmatch(r'0x[a-fA-F0-9]{40}', str(value).strip()))
 
@@ -455,8 +462,14 @@ def build_registry() -> dict:
         contracts = deployed_entry.get('contracts', {})
         if not isinstance(contracts, dict):
             contracts = {}
+        fees_cfg = deployed_entry.get('fees', {})
+        if not isinstance(fees_cfg, dict):
+            fees_cfg = {}
 
         stabilizer = str(contracts.get('stabilizer', '')).strip()
+        resonance_vault = str(contracts.get('resonanceVault', '')).strip()
+        swap_fee_bps = _safe_int(fees_cfg.get('swapFeeBps', os.getenv('SWAP_FEE_BPS', '30')), 30)
+        protocol_fee_bps = _safe_int(fees_cfg.get('protocolFeeBps', os.getenv('PROTOCOL_FEE_BPS', '5')), 5)
         chain_entry = {
             'chain_key': spec['chain_key'],
             'chain_id': spec['chain_id'],
@@ -465,18 +478,21 @@ def build_registry() -> dict:
             'rpc_env_key': spec['rpc_env_key'],
             'default_rpc_url': spec['default_rpc_url'],
             'amm': {
-                'swap_fee_bps': int(os.getenv('SWAP_FEE_BPS', '30'))
+                'swap_fee_bps': swap_fee_bps,
+                'protocol_fee_bps': protocol_fee_bps
             },
             'contracts': {
                 'musd': contracts.get('musd', ''),
                 'stabilizer': stabilizer,
                 'oracle': contracts.get('oracle', ''),
                 'harmony_factory': contracts.get('harmonyFactory', ''),
-                'harmony_router': contracts.get('harmonyRouter', '')
+                'harmony_router': contracts.get('harmonyRouter', ''),
+                'resonance_vault': contracts.get('resonanceVault', '')
             },
             'indexer': {
                 'pair_addresses': [],
                 'stabilizer_addresses': [stabilizer] if _is_evm_address(stabilizer) else [],
+                'vault_addresses': [resonance_vault] if _is_evm_address(resonance_vault) else [],
                 'start_block': 'latest',
                 'confirmation_depth': spec['confirmation_depth']
             },
@@ -525,7 +541,7 @@ def build_registry() -> dict:
         chains.append(chain_entry)
 
     return {
-        'version': 2,
+        'version': 3,
         'generated_at': generated_at,
         'source': 'packages/contracts/deploy/address-registry.*.json + live-rpc-pair-discovery',
         'chains': chains

@@ -19,7 +19,11 @@ ALLOWED_ACTIONS = {
     'LIQUIDITY_ADD',
     'LIQUIDITY_REMOVE',
     'MUSD_MINT',
-    'MUSD_BURN'
+    'MUSD_BURN',
+    'PROTOCOL_FEE_ACCRUED',
+    'FEE_TRANSFERRED_TO_TREASURY',
+    'TREASURY_CONVERTED_TO_MUSD',
+    'DISTRIBUTION_EXECUTED'
 }
 
 
@@ -125,6 +129,8 @@ class NotesValidator:
         self._validate_decimal(raw.gas_used, 'gas_used', allow_zero=True)
         self._validate_decimal(raw.gas_cost_usd, 'gas_cost_usd', allow_zero=True)
         self._validate_decimal(raw.protocol_revenue_usd, 'protocol_revenue_usd', allow_zero=True)
+        min_out = str(raw.min_out).strip() or '0'
+        self._validate_decimal(min_out, 'min_out', allow_zero=True)
 
         tx_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{raw.chain_id}:{raw.tx_hash}:{raw.note_id}"))
         valid = self.proto.dex_tx_valid_pb2.DexTxValid(
@@ -145,7 +151,8 @@ class NotesValidator:
             gas_cost_usd=raw.gas_cost_usd,
             protocol_revenue_usd=raw.protocol_revenue_usd,
             block_number=raw.block_number,
-            validation_version='v1'
+            validation_version='v1',
+            min_out=min_out
         )
 
         if raw.HasField('occurred_at'):

@@ -23,4 +23,5 @@ message DexTxRaw {
   uint64 block_number = 16;
   google.protobuf.Timestamp occurred_at = 17;
   string source = 18;
+  string min_out = 19;
 }

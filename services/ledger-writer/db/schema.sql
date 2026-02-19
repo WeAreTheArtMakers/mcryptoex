@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS dex_transactions (
     gas_used NUMERIC(78, 0) NOT NULL DEFAULT 0,
     gas_cost_usd NUMERIC(78, 18) NOT NULL DEFAULT 0,
     protocol_revenue_usd NUMERIC(78, 18) NOT NULL DEFAULT 0,
+    min_out NUMERIC(78, 18) NOT NULL DEFAULT 0,
     block_number BIGINT NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL,
     ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -27,6 +28,9 @@ CREATE INDEX IF NOT EXISTS idx_dex_transactions_chain_occurred
 
 CREATE INDEX IF NOT EXISTS idx_dex_transactions_action_occurred
     ON dex_transactions (action, occurred_at DESC);
+
+ALTER TABLE dex_transactions
+    ADD COLUMN IF NOT EXISTS min_out NUMERIC(78, 18) NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS dex_ledger_entries (
     entry_id BIGSERIAL PRIMARY KEY,

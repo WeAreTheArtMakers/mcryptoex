@@ -24,4 +24,5 @@ message DexTxValid {
   uint64 block_number = 17;
   google.protobuf.Timestamp occurred_at = 18;
   string validation_version = 19;
+  string min_out = 20;
 }

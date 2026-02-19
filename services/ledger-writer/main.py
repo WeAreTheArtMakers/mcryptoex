@@ -134,12 +134,14 @@ class LedgerWriter:
         gas_used = _dec(valid.gas_used)
         gas_cost_usd = _dec(valid.gas_cost_usd)
         protocol_revenue_usd = _dec(valid.protocol_revenue_usd)
+        min_out = _dec(valid.min_out)
 
         ledger_rows = self._build_ledger_rows(
             tx_id=valid.tx_id,
             note_id=valid.note_id,
             chain_id=valid.chain_id,
             tx_hash=valid.tx_hash,
+            action=valid.action,
             user_address=valid.user_address,
             pool_address=valid.pool_address,
             token_in=valid.token_in,
@@ -182,13 +184,14 @@ class LedgerWriter:
                   gas_used,
                   gas_cost_usd,
                   protocol_revenue_usd,
+                  min_out,
                   block_number,
                   occurred_at,
                   ingested_at
                 )
                 VALUES (
                   %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                  %s, %s, %s, %s, %s, %s, %s, %s, %s
+                  %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (note_id) DO NOTHING
                 RETURNING tx_id
@@ -210,6 +213,7 @@ class LedgerWriter:
                     gas_used,
                     gas_cost_usd,
                     protocol_revenue_usd,
+                    min_out,
                     valid.block_number,
                     occurred_at,
                     ingested_at
@@ -286,6 +290,7 @@ class LedgerWriter:
         note_id: str,
         chain_id: int,
         tx_hash: str,
+        action: str,
         user_address: str,
         pool_address: str,
         token_in: str,
@@ -336,11 +341,50 @@ class LedgerWriter:
         user_account = f'user:{user_address.lower()}'
         pool_account = f'pool:{pool_address.lower()}'
 
-        add_pair('swap_notional_in', user_account, pool_account, token_in, amount_in)
-        add_pair('swap_notional_out', pool_account, user_account, token_out, amount_out)
-        add_pair('trade_fee_usd', user_account, 'protocol:treasury', 'USD', fee_usd)
-        add_pair('gas_cost_usd', user_account, f'network:{chain_id}', 'USD', gas_cost_usd)
-        add_pair('protocol_revenue_usd', pool_account, 'protocol:treasury', 'USD', protocol_revenue_usd)
+        if action == 'SWAP':
+            add_pair('swap_notional_in', user_account, pool_account, token_in, amount_in)
+            add_pair('swap_notional_out', pool_account, user_account, token_out, amount_out)
+            add_pair('trade_fee_usd', user_account, 'protocol:treasury', 'USD', fee_usd)
+            add_pair('protocol_revenue_usd', pool_account, 'protocol:treasury', 'USD', protocol_revenue_usd)
+            add_pair('gas_cost_usd', user_account, f'network:{chain_id}', 'USD', gas_cost_usd)
+            return rows
+
+        if action == 'LIQUIDITY_ADD':
+            add_pair('liquidity_add_in_a', user_account, pool_account, token_in, amount_in)
+            add_pair('liquidity_add_in_b', user_account, pool_account, token_out, amount_out)
+            add_pair('gas_cost_usd', user_account, f'network:{chain_id}', 'USD', gas_cost_usd)
+            return rows
+
+        if action == 'LIQUIDITY_REMOVE':
+            add_pair('liquidity_remove_out_a', pool_account, user_account, token_in, amount_in)
+            add_pair('liquidity_remove_out_b', pool_account, user_account, token_out, amount_out)
+            add_pair('gas_cost_usd', user_account, f'network:{chain_id}', 'USD', gas_cost_usd)
+            return rows
+
+        if action == 'MUSD_MINT':
+            add_pair('musd_mint_collateral', user_account, pool_account, token_in, amount_in)
+            add_pair('musd_mint_issue', pool_account, user_account, token_out, amount_out)
+            add_pair('gas_cost_usd', user_account, f'network:{chain_id}', 'USD', gas_cost_usd)
+            return rows
+
+        if action == 'MUSD_BURN':
+            add_pair('musd_burn_in', user_account, pool_account, token_in, amount_in)
+            add_pair('musd_burn_redeem', pool_account, user_account, token_out, amount_out)
+            add_pair('gas_cost_usd', user_account, f'network:{chain_id}', 'USD', gas_cost_usd)
+            return rows
+
+        if action == 'FEE_TRANSFERRED_TO_TREASURY':
+            add_pair('fee_transfer_to_treasury', pool_account, 'protocol:treasury', token_in, amount_in)
+            return rows
+
+        if action == 'TREASURY_CONVERTED_TO_MUSD':
+            add_pair('treasury_convert_spend', 'protocol:conversion', 'protocol:treasury', token_in, amount_in)
+            add_pair('treasury_convert_receive', 'protocol:treasury', 'protocol:conversion', token_out, amount_out)
+            return rows
+
+        if action == 'DISTRIBUTION_EXECUTED':
+            add_pair('treasury_distribution', user_account, 'protocol:treasury', 'mUSD', amount_in)
+            return rows
 
         return rows
 
@@ -410,6 +454,7 @@ class LedgerWriter:
                     int(_dec(valid.gas_used)),
                     _dec(valid.gas_cost_usd),
                     _dec(valid.protocol_revenue_usd),
+                    _dec(valid.min_out),
                     occurred_at,
                     datetime.now(timezone.utc)
                 ]
@@ -430,6 +475,7 @@ class LedgerWriter:
                 'gas_used',
                 'gas_cost_usd',
                 'protocol_revenue_usd',
+                'min_out',
                 'occurred_at',
                 'ingested_at'
             ]
