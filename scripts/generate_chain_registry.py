@@ -89,34 +89,77 @@ def _token_entry(symbol: str, name: str, decimals: int, address: str, source: st
     }
 
 
-def _resolve_tokens(spec: dict, contracts: dict) -> list[dict]:
+def _append_registry_collaterals(tokens: list[dict], deployed_entry: dict) -> list[dict]:
+    configured = deployed_entry.get('collaterals', [])
+    if not isinstance(configured, list):
+        return tokens
+
+    existing = {
+        str(token.get('address', '')).lower()
+        for token in tokens
+        if isinstance(token, dict) and _is_evm_address(str(token.get('address', '')))
+    }
+
+    for item in configured:
+        if not isinstance(item, dict):
+            continue
+        address = str(item.get('token', '')).strip()
+        if not _is_evm_address(address):
+            continue
+        address_lower = address.lower()
+        if address_lower in existing:
+            continue
+        symbol = str(item.get('symbol', '')).strip() or f'TKN{address[-4:]}'
+        decimals_raw = item.get('decimals', 18)
+        try:
+            decimals = int(decimals_raw)
+        except (TypeError, ValueError):
+            decimals = 18
+        tokens.append(
+            _token_entry(
+                symbol,
+                f'{symbol} collateral',
+                decimals,
+                address,
+                'deployed.collaterals'
+            )
+        )
+        existing.add(address_lower)
+
+    return tokens
+
+
+def _resolve_tokens(spec: dict, contracts: dict, deployed_entry: dict) -> list[dict]:
     musd = contracts.get('musd', 'unconfigured-musd')
     if spec['chain_key'] == 'hardhat-local':
         token_a = contracts.get('tokenA', 'local-weth')
         token_b = contracts.get('tokenB', 'local-wbtc')
         collateral = contracts.get('collateral', 'local-usdc')
-        return [
+        tokens = [
             _token_entry('mUSD', 'Musical USD', 18, musd, 'contracts.musd'),
             _token_entry('USDC', 'USD Coin (local collateral)', 6, collateral, 'contracts.collateral'),
             _token_entry('WETH', 'Wrapped Ether', 18, token_a, 'contracts.tokenA'),
             _token_entry('WBTC', 'Wrapped Bitcoin', 8, token_b, 'contracts.tokenB'),
             _token_entry('WSOL', 'Wrapped SOL (EVM)', 18, 'local-wsol', 'defaults')
         ]
+        return _append_registry_collaterals(tokens, deployed_entry)
 
     if spec['chain_key'] == 'ethereum-sepolia':
-        return [
+        tokens = [
             _token_entry('mUSD', 'Musical USD', 18, musd, 'contracts.musd'),
             _token_entry('WETH', 'Wrapped Ether', 18, 'bridge-weth-sepolia', 'defaults'),
             _token_entry('wBTC', 'Wrapped Bitcoin (bridge)', 8, 'bridge-wbtc-sepolia', 'defaults'),
             _token_entry('wSOL', 'Wrapped SOL (bridge)', 18, 'bridge-wsol-sepolia', 'defaults')
         ]
+        return _append_registry_collaterals(tokens, deployed_entry)
 
-    return [
+    tokens = [
         _token_entry('mUSD', 'Musical USD', 18, musd, 'contracts.musd'),
         _token_entry('WBNB', 'Wrapped BNB', 18, 'bridge-wbnb-bsc', 'defaults'),
         _token_entry('wBTC', 'Wrapped Bitcoin (bridge)', 18, 'bridge-wbtc-bsc', 'defaults'),
         _token_entry('wSOL', 'Wrapped SOL (bridge)', 18, 'bridge-wsol-bsc', 'defaults')
     ]
+    return _append_registry_collaterals(tokens, deployed_entry)
 
 
 def _trust_assumptions(chain_key: str, checked_at: str) -> list[dict]:
@@ -444,7 +487,7 @@ def build_registry() -> dict:
                 'checked_at': generated_at,
                 'discovery_status': 'not-started'
             },
-            'tokens': _resolve_tokens(spec, contracts),
+            'tokens': _resolve_tokens(spec, contracts, deployed_entry),
             'trust_assumptions': _trust_assumptions(spec['chain_key'], generated_at),
             'provenance': {
                 'deployed_registry_file': f"address-registry.{spec['network']}.json"

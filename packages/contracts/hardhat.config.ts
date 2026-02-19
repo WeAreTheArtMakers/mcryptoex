@@ -22,12 +22,12 @@ const config: HardhatUserConfig = {
       chainId: 31337
     },
     sepolia: {
-      url: process.env.SEPOLIA_RPC_URL || '',
+      url: process.env.SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com',
       accounts: privateKey,
       chainId: 11155111
     },
     bscTestnet: {
-      url: process.env.BSC_TESTNET_RPC_URL || 'https://data-seed-prebsc-1-s1.binance.org:8545/',
+      url: process.env.BSC_TESTNET_RPC_URL || 'https://bsc-testnet-rpc.publicnode.com',
       accounts: privateKey,
       chainId: 97
     }
