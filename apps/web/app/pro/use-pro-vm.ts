@@ -16,6 +16,8 @@ const DEFAULT_SWAP_GAS_BY_CHAIN: Record<number, bigint> = {
 };
 const SWAP_GAS_SOFT_CAP = 3_000_000n;
 const SWAP_GAS_FLOOR = 250_000n;
+const LEDGER_RECENT_MAX_LIMIT = 500;
+const ANALYTICS_MAX_MINUTES = 1440;
 
 const harmonyRouterAbi = [
   {
@@ -275,8 +277,8 @@ function formatBucket(bucket: number, timeframe: Timeframe): string {
 function timeframeWindowMinutes(timeframe: Timeframe): number {
   if (timeframe === '1m') return 180;
   if (timeframe === '5m') return 720;
-  if (timeframe === '1h') return 7 * 24 * 60;
-  return 30 * 24 * 60;
+  if (timeframe === '1h') return ANALYTICS_MAX_MINUTES;
+  return ANALYTICS_MAX_MINUTES;
 }
 
 type PairStats = {
@@ -594,7 +596,7 @@ export function useMarketListVM(chainId: number, searchQuery: string, filter: 'a
         const [pairsPayload, tokensPayloadData, ledgerPayload] = await Promise.all([
           fetchJson<PairsResponse>(`/pairs?chain_id=${chainId}&limit=250`),
           fetchJson<TokensResponse>('/tokens'),
-          fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=2000`)
+          fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=${LEDGER_RECENT_MAX_LIMIT}`)
         ]);
         if (!active) return;
         setPairs(pairsPayload.rows || []);
@@ -672,7 +674,7 @@ export function useTradesVM(chainId: number, selectedPair: MarketRow | null) {
       setLoading(true);
       setError('');
       try {
-        const payload = await fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=2000`);
+        const payload = await fetchJson<LedgerResponse>(`/ledger/recent?chain_id=${chainId}&limit=${LEDGER_RECENT_MAX_LIMIT}`);
         if (!active) return;
         setTrades(parseTrades(payload.rows || [], selectedPair));
       } catch (err) {
@@ -709,7 +711,7 @@ export function usePairVM(params: {
 
   useEffect(() => {
     let active = true;
-    const minutes = timeframeWindowMinutes(timeframe);
+    const minutes = Math.min(ANALYTICS_MAX_MINUTES, timeframeWindowMinutes(timeframe));
 
     async function load() {
       setLoading(true);
@@ -734,7 +736,7 @@ export function usePairVM(params: {
       active = false;
       window.clearInterval(timer);
     };
-  }, [timeframe]);
+  }, [chainId, timeframe]);
 
   const ohlcCandles = useMemo(() => computeOhlcCandles(trades, timeframe), [timeframe, trades]);
   const chartPoints = useMemo(

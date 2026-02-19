@@ -1,9 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useAccount } from 'wagmi';
 import {
   DEFAULT_CHAIN_ID,
+  MarketRow,
   OhlcCandle,
   Timeframe,
   shortAmount,
@@ -18,6 +20,8 @@ type MarketFilter = 'all' | 'favorites' | 'spot';
 type MobilePanel = 'markets' | 'chart' | 'trade' | 'account';
 type BookTab = 'book' | 'trades';
 type AccountTab = 'balances' | 'positions' | 'open-orders' | 'twap' | 'trade-history' | 'funding-history' | 'order-history';
+type MarketChip = 'all' | 'perps' | 'spot' | 'crypto' | 'tradfi' | 'hip-3' | 'trending' | 'pre-launch';
+type DeskTab = 'trade' | 'portfolio' | 'earn' | 'vaults' | 'staking' | 'referrals' | 'leaderboard' | 'more';
 
 type PersistedLayout = {
   chainId: number;
@@ -32,6 +36,26 @@ type PersistedLayout = {
 };
 
 const LAYOUT_STORAGE_KEY = 'mcryptoex.pro.layout.v3';
+const DESK_LINKS: Array<{ id: DeskTab; label: string; href: string }> = [
+  { id: 'trade', label: 'Trade', href: '/pro?desk=trade' },
+  { id: 'portfolio', label: 'Portfolio', href: '/pro?desk=portfolio' },
+  { id: 'earn', label: 'Earn', href: '/pro?desk=earn' },
+  { id: 'vaults', label: 'Vaults', href: '/pro?desk=vaults' },
+  { id: 'staking', label: 'Staking', href: '/pro?desk=staking' },
+  { id: 'referrals', label: 'Referrals', href: '/pro?desk=referrals' },
+  { id: 'leaderboard', label: 'Leaderboard', href: '/pro?desk=leaderboard' },
+  { id: 'more', label: 'More', href: '/pro?desk=more' }
+];
+
+const PLATFORM_LINKS = [
+  { label: 'Overture', href: '/overture' },
+  { label: 'Exchange Pro', href: '/pro' },
+  { label: 'Harmony Swap', href: '/harmony' },
+  { label: 'Liquidity', href: '/liquidity' },
+  { label: 'Pools', href: '/pools' },
+  { label: 'Ledger', href: '/ledger' },
+  { label: 'Analytics', href: '/analytics' }
+] as const;
 
 function shortAddress(value?: string) {
   if (!value) return '0x...';
@@ -50,6 +74,68 @@ function changeClass(value: number | null): string {
 
 function safe(value: number): number {
   return Number.isFinite(value) ? value : 0;
+}
+
+function formatSyntheticBucket(bucket: number, timeframe: Timeframe): string {
+  const date = new Date(bucket);
+  if (timeframe === '1d') return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (timeframe === '1h') return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit' });
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function syntheticStepMs(timeframe: Timeframe): number {
+  if (timeframe === '1d') return 24 * 60 * 60 * 1000;
+  if (timeframe === '1h') return 60 * 60 * 1000;
+  if (timeframe === '5m') return 5 * 60 * 1000;
+  return 60 * 1000;
+}
+
+function buildSyntheticCandles(pair: MarketRow | null, timeframe: Timeframe): OhlcCandle[] {
+  let base = 1;
+  let volumeBase = 0;
+  let feeBase = 0;
+
+  if (pair) {
+    base = pair.last && pair.last > 0 ? pair.last : 0;
+    if (base <= 0 && pair.reserve0 > 0 && pair.reserve1 > 0) {
+      base = pair.reserve1 / pair.reserve0;
+    }
+    volumeBase = pair.volume24h;
+    feeBase = pair.totalFeeUsd;
+  }
+  if (!Number.isFinite(base) || base <= 0) base = 1;
+
+  const stepMs = syntheticStepMs(timeframe);
+  const count = timeframe === '1d' ? 30 : timeframe === '1h' ? 72 : timeframe === '5m' ? 120 : 180;
+  const normalizedVolume = Math.max(0, volumeBase / Math.max(1, count));
+  const normalizedFees = Math.max(0, feeBase / Math.max(1, count));
+  const now = Date.now();
+  const candles: OhlcCandle[] = [];
+
+  for (let idx = count - 1; idx >= 0; idx -= 1) {
+    const bucket = Math.floor((now - idx * stepMs) / stepMs) * stepMs;
+    const phase = (count - idx) / 8;
+    const driftOpen = Math.sin(phase) * base * 0.0018;
+    const driftClose = Math.sin(phase + 0.5) * base * 0.0018;
+    const open = Math.max(0.00000001, base + driftOpen);
+    const close = Math.max(0.00000001, base + driftClose);
+    const high = Math.max(open, close) * 1.0009;
+    const low = Math.min(open, close) * 0.9991;
+
+    candles.push({
+      bucket,
+      label: formatSyntheticBucket(bucket, timeframe),
+      open,
+      high,
+      low,
+      close,
+      volume: normalizedVolume,
+      fees: normalizedFees,
+      tradeCount: 0
+    });
+  }
+
+  return candles;
 }
 
 function OhlcCanvas({ candles, pairLabel }: { candles: OhlcCandle[]; pairLabel: string }) {
@@ -168,17 +254,20 @@ export function ProTerminal() {
   const [chainId, setChainId] = useState(DEFAULT_CHAIN_ID);
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<MarketFilter>('all');
+  const [marketChip, setMarketChip] = useState<MarketChip>('all');
   const [selectedPairId, setSelectedPairId] = useState('');
   const [timeframe, setTimeframe] = useState<Timeframe>('1h');
   const [bookTab, setBookTab] = useState<BookTab>('book');
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>('markets');
   const [accountTab, setAccountTab] = useState<AccountTab>('balances');
+  const [strictMode, setStrictMode] = useState(true);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [selectedPairByChain, setSelectedPairByChain] = useState<Record<string, string>>({});
   const [ready, setReady] = useState(false);
   const [sizePct, setSizePct] = useState(0);
 
   const { address } = useAccount();
+  const activeDesk: DeskTab = 'trade';
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -285,8 +374,27 @@ export function ProTerminal() {
 
   const askMax = Math.max(1, ...orderbookVM.asks.map((level) => safe(level.total)));
   const bidMax = Math.max(1, ...orderbookVM.bids.map((level) => safe(level.total)));
+  const displayCandles = useMemo(
+    () => (pairVM.ohlcCandles.length ? pairVM.ohlcCandles : buildSyntheticCandles(selectedPair, timeframe)),
+    [pairVM.ohlcCandles, selectedPair, timeframe]
+  );
+  const usingSyntheticChart = pairVM.ohlcCandles.length === 0 && displayCandles.length > 0;
 
   const chainLabel = marketVM.selectedNetwork ? `${marketVM.selectedNetwork.name} (${chainId})` : `Chain ${chainId}`;
+
+  const applyMarketChip = (chip: MarketChip) => {
+    setMarketChip(chip);
+    if (chip === 'spot') {
+      setFilter('spot');
+      return;
+    }
+    if (chip === 'all') {
+      setFilter('all');
+      return;
+    }
+    // Non-spot categories are visual groups for now; keep broad market set.
+    setFilter('all');
+  };
 
   useEffect(() => {
     if (sizePct <= 0) return;
@@ -349,10 +457,14 @@ export function ProTerminal() {
             <span className="text-sm font-semibold">mCryptoEx</span>
           </div>
           <nav className="hidden items-center gap-5 text-sm text-slate-200 xl:flex">
-            {['Trade', 'Portfolio', 'Earn', 'Vaults', 'Staking', 'Referrals', 'Leaderboard', 'More'].map((item) => (
-              <button key={item} type="button" className={`transition ${item === 'Trade' ? 'text-[#58d4c8]' : 'hover:text-white'}`}>
-                {item}
-              </button>
+            {DESK_LINKS.map((item) => (
+              <Link
+                key={item.id}
+                href={item.href}
+                className={`transition ${activeDesk === item.id ? 'text-[#58d4c8]' : 'text-slate-200 hover:text-white'}`}
+              >
+                {item.label}
+              </Link>
             ))}
           </nav>
         </div>
@@ -368,6 +480,26 @@ export function ProTerminal() {
 
       <div className="h-8 border-b border-[#1b3f4d] bg-[#58d4c8] px-4 py-1 text-xs font-medium text-[#062428]">
         Wallet-first non-custodial trading. Tempo API is read-only; all executions are wallet-signed.
+      </div>
+      <div className="border-b border-[#1b3f4d] bg-[#091623] px-3 py-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {PLATFORM_LINKS.map((item) => {
+            const active = item.href === '/pro';
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`rounded border px-2 py-1 text-[11px] ${
+                  active
+                    ? 'border-[#57d6ca] bg-[#123345] text-[#79e7dc]'
+                    : 'border-[#21445b] bg-[#0c1a29] text-slate-300 hover:text-white'
+                }`}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </div>
       </div>
 
       <main className="flex-1 p-1.5">
@@ -432,8 +564,20 @@ export function ProTerminal() {
             <div className="mb-2 flex items-center justify-between">
               <p className="text-xs text-slate-400">{chainLabel}</p>
               <div className="flex items-center gap-1">
-                <button className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1 text-[11px] text-[#77e5da]">Strict</button>
-                <button className="rounded border border-[#21445b] bg-[#0c1a29] px-2 py-1 text-[11px] text-slate-300">All</button>
+                <button
+                  type="button"
+                  onClick={() => setStrictMode(true)}
+                  className={`rounded border px-2 py-1 text-[11px] ${strictMode ? 'border-[#57d6ca] bg-[#123345] text-[#75e6da]' : 'border-[#21445b] bg-[#0c1a29] text-slate-300'}`}
+                >
+                  Strict
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStrictMode(false)}
+                  className={`rounded border px-2 py-1 text-[11px] ${!strictMode ? 'border-[#57d6ca] bg-[#123345] text-[#75e6da]' : 'border-[#21445b] bg-[#0c1a29] text-slate-300'}`}
+                >
+                  All
+                </button>
               </div>
             </div>
 
@@ -459,12 +603,23 @@ export function ProTerminal() {
             </div>
 
             <div className="mb-2 flex flex-wrap gap-1 text-[11px]">
-              {['All', 'Perps', 'Spot', 'Crypto', 'Tradfi', 'HIP-3', 'Trending', 'Pre-launch'].map((chip) => (
+              {([
+                ['all', 'All'],
+                ['perps', 'Perps'],
+                ['spot', 'Spot'],
+                ['crypto', 'Crypto'],
+                ['tradfi', 'Tradfi'],
+                ['hip-3', 'HIP-3'],
+                ['trending', 'Trending'],
+                ['pre-launch', 'Pre-launch']
+              ] as const).map(([chip, label]) => (
                 <button
                   key={chip}
-                  className={`rounded border px-2 py-1 ${chip === 'All' ? 'border-[#57d6ca] text-[#75e6da]' : 'border-[#21445b] text-slate-400'}`}
+                  type="button"
+                  onClick={() => applyMarketChip(chip)}
+                  className={`rounded border px-2 py-1 ${marketChip === chip ? 'border-[#57d6ca] text-[#75e6da]' : 'border-[#21445b] text-slate-400 hover:text-slate-200'}`}
                 >
-                  {chip}
+                  {label}
                 </button>
               ))}
             </div>
@@ -560,9 +715,14 @@ export function ProTerminal() {
                 ))}
               </div>
               <div className="overflow-hidden rounded border border-[#183549] bg-[#08131f]">
-                <OhlcCanvas candles={pairVM.ohlcCandles} pairLabel={selectedPair?.pair || 'pair'} />
+                <OhlcCanvas candles={displayCandles} pairLabel={selectedPair?.pair || 'pair'} />
               </div>
             </div>
+            {usingSyntheticChart ? (
+              <p className="mt-2 text-[11px] text-amber-200">
+                Ledger OHLC is not available yet; chart is showing reserve-derived preview candles.
+              </p>
+            ) : null}
             {pairVM.error ? <p className="mt-2 text-xs text-rose-300">{pairVM.error}</p> : null}
           </section>
 
