@@ -16,8 +16,8 @@ const DEFAULT_SWAP_GAS_BY_CHAIN: Record<number, bigint> = {
 };
 const SWAP_GAS_SOFT_CAP = 3_000_000n;
 const SWAP_GAS_FLOOR = 250_000n;
-const LEDGER_RECENT_MAX_LIMIT = 500;
-const ANALYTICS_MAX_MINUTES = 1440;
+const LEDGER_RECENT_MAX_LIMIT = 2000;
+const ANALYTICS_MAX_MINUTES = 43200;
 
 const harmonyRouterAbi = [
   {
@@ -276,8 +276,8 @@ function formatBucket(bucket: number, timeframe: Timeframe): string {
 
 function timeframeWindowMinutes(timeframe: Timeframe): number {
   if (timeframe === '1m') return 180;
-  if (timeframe === '5m') return 720;
-  if (timeframe === '1h') return ANALYTICS_MAX_MINUTES;
+  if (timeframe === '5m') return 1440;
+  if (timeframe === '1h') return 10080;
   return ANALYTICS_MAX_MINUTES;
 }
 

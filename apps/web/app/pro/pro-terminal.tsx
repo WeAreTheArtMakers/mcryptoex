@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAccount } from 'wagmi';
 import {
   DEFAULT_CHAIN_ID,
@@ -267,7 +268,19 @@ export function ProTerminal() {
   const [sizePct, setSizePct] = useState(0);
 
   const { address } = useAccount();
-  const activeDesk: DeskTab = 'trade';
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const activeDesk = useMemo<DeskTab>(() => {
+    const raw = (searchParams.get('desk') || 'trade').toLowerCase();
+    if (raw === 'portfolio') return 'portfolio';
+    if (raw === 'earn') return 'earn';
+    if (raw === 'vaults') return 'vaults';
+    if (raw === 'staking') return 'staking';
+    if (raw === 'referrals') return 'referrals';
+    if (raw === 'leaderboard') return 'leaderboard';
+    if (raw === 'more') return 'more';
+    return 'trade';
+  }, [searchParams]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -381,6 +394,37 @@ export function ProTerminal() {
   const usingSyntheticChart = pairVM.ohlcCandles.length === 0 && displayCandles.length > 0;
 
   const chainLabel = marketVM.selectedNetwork ? `${marketVM.selectedNetwork.name} (${chainId})` : `Chain ${chainId}`;
+  const musdBalance = useMemo(() => {
+    const raw = entryVM.walletBalances.MUSD ?? entryVM.walletBalances.mUSD ?? '0';
+    return Number(raw);
+  }, [entryVM.walletBalances]);
+  const needsMusdOnboarding = entryVM.isConnected && Number.isFinite(musdBalance) && musdBalance <= 0.0000001;
+
+  const setupFirstTradeToMusd = useCallback(() => {
+    const normalizedWrapped = entryVM.wrappedNativeSymbol.toUpperCase();
+    const musdPairs = marketVM.allRows.filter(
+      (row) => row.token0 === 'MUSD' || row.token1 === 'MUSD'
+    );
+
+    const preferred =
+      musdPairs.find((row) => row.token0 === 'MUSD' && row.token1 === normalizedWrapped) ||
+      musdPairs.find((row) => row.token1 === 'MUSD' && row.token0 === normalizedWrapped) ||
+      musdPairs[0] ||
+      null;
+
+    if (!preferred) return;
+    setSelectedPairId(preferred.id);
+    entryVM.setEntryMode('market');
+    if (preferred.token0 === 'MUSD') {
+      entryVM.setSide('buy');
+    } else {
+      entryVM.setSide('sell');
+    }
+    if (!entryVM.amount || Number(entryVM.amount) <= 0) {
+      entryVM.setAmount('0.1');
+    }
+    setMobilePanel('trade');
+  }, [entryVM, marketVM.allRows]);
 
   const applyMarketChip = (chip: MarketChip) => {
     setMarketChip(chip);
@@ -484,7 +528,7 @@ export function ProTerminal() {
       <div className="border-b border-[#1b3f4d] bg-[#091623] px-3 py-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           {PLATFORM_LINKS.map((item) => {
-            const active = item.href === '/pro';
+            const active = item.href === pathname;
             return (
               <Link
                 key={item.href}
@@ -500,6 +544,37 @@ export function ProTerminal() {
             );
           })}
         </div>
+      </div>
+
+      <div className="border-b border-[#1b3f4d] bg-[#08121c] px-3 py-2 text-xs">
+        {activeDesk !== 'trade' ? (
+          <p className="text-slate-300">
+            <span className="text-[#79e7dc]">{activeDesk}</span> view is in staged rollout. Trade execution stays non-custodial on
+            <Link href="/pro?desk=trade" className="ml-1 text-[#79e7dc] underline">
+              Trade desk
+            </Link>
+            .
+          </p>
+        ) : needsMusdOnboarding ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-slate-200">
+              First step: convert native {chainId === 97 ? 'tBNB' : 'gas token'} to <span className="text-[#79e7dc]">mUSD</span> to
+              start trading pairs.
+            </p>
+            <button
+              type="button"
+              onClick={setupFirstTradeToMusd}
+              className="rounded border border-[#57d6ca] bg-[#123345] px-2 py-1 text-[11px] font-semibold text-[#79e7dc]"
+            >
+              Auto Setup Native → mUSD
+            </button>
+            <Link href="/harmony?intent=first-trade&output=mUSD" className="text-[#79e7dc] underline">
+              Open Guided Swap
+            </Link>
+          </div>
+        ) : (
+          <p className="text-slate-400">mUSD balance detected. You can quote and execute trades directly from this panel.</p>
+        )}
       </div>
 
       <main className="flex-1 p-1.5">

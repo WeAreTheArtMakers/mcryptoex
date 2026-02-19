@@ -286,7 +286,7 @@ async def pairs(
 
 @app.get('/ledger/recent')
 async def ledger_recent(
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=2000),
     chain_id: int | None = Query(default=None, gt=0),
     entry_type: str | None = Query(default=None)
 ) -> dict:
@@ -339,7 +339,7 @@ async def ledger_recent(
 
 
 @app.get('/analytics')
-async def analytics(minutes: int = Query(default=60, ge=1, le=1440)) -> dict:
+async def analytics(minutes: int = Query(default=60, ge=1, le=43200)) -> dict:
     assert _ch is not None
 
     volume = _ch.query(

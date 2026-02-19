@@ -14,12 +14,14 @@ from typing import Any
 from confluent_kafka import Producer
 from eth_abi import decode
 from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
 
 from services.common.proto_codec import load_proto_bundle
 
 getcontext().prec = 78
 
 LOGGER = logging.getLogger('mcryptoex.indexer')
+POA_CHAIN_IDS = {56, 97}
 
 PAIR_ABI = [
     {
@@ -323,6 +325,10 @@ class ChainIndexer:
             if not self.web3.is_connected():
                 LOGGER.warning('rpc is not reachable at %s; running in idle/simulation mode', self.settings.rpc_url)
                 self.web3 = None
+            elif self.settings.chain_id in POA_CHAIN_IDS:
+                # BSC-style PoA chains require extraData middleware for block/log decoding.
+                self.web3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+                LOGGER.info('enabled PoA middleware for chain_id=%s', self.settings.chain_id)
         else:
             LOGGER.info('INDEXER_RPC_URL not set; running in idle/simulation mode')
 

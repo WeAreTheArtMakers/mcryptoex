@@ -13,6 +13,8 @@
     "estimate:deploy:gas": "hardhat run scripts/estimate-gas-testnets.ts",
     "bootstrap:liquidity:sepolia": "hardhat run scripts/bootstrap-liquidity.ts --network sepolia",
     "bootstrap:liquidity:bscTestnet": "hardhat run scripts/bootstrap-liquidity.ts --network bscTestnet",
+    "smoke:swap:sepolia": "hardhat run scripts/smoke-swap.ts --network sepolia",
+    "smoke:swap:bscTestnet": "hardhat run scripts/smoke-swap.ts --network bscTestnet",
     "handoff:admin": "hardhat run scripts/handoff-admin.ts"
   },
   "devDependencies": {
