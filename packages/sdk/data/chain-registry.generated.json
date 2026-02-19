@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "generated_at": "2026-02-19T06:25:57.723418+00:00",
+  "generated_at": "2026-02-19T07:25:22.512670+00:00",
   "source": "packages/contracts/deploy/address-registry.*.json + live-rpc-pair-discovery",
   "chains": [
     {
@@ -37,7 +37,7 @@
       "network_health": {
         "rpc_connected": false,
         "latest_block": null,
-        "checked_at": "2026-02-19T06:25:57.723418+00:00",
+        "checked_at": "2026-02-19T07:25:22.512670+00:00",
         "discovery_status": "error: rpc call failed via urllib and curl: HTTP Error 502: Bad Gateway; curl=curl: (6) Could not resolve host: host.docker.internal"
       },
       "tokens": [
@@ -85,7 +85,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -95,7 +95,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -105,7 +105,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -142,8 +142,8 @@
       "pairs": [],
       "network_health": {
         "rpc_connected": true,
-        "latest_block": 10290925,
-        "checked_at": "2026-02-19T06:25:57.723418+00:00",
+        "latest_block": 10291212,
+        "checked_at": "2026-02-19T07:25:22.512670+00:00",
         "discovery_status": "factory-not-configured"
       },
       "tokens": [
@@ -184,7 +184,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -194,7 +194,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -204,7 +204,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -224,32 +224,54 @@
         "protocol_fee_bps": 5
       },
       "contracts": {
-        "musd": "",
-        "stabilizer": "",
-        "oracle": "",
-        "harmony_factory": "",
-        "harmony_router": "",
-        "resonance_vault": ""
+        "musd": "0x63a3530a1CB7Cc64F1D40a32C7d08D82226e9163",
+        "stabilizer": "0xa8Ed74cf4aBfF6c7015114228504474B7602e311",
+        "oracle": "0xe0Dd3f2016bE1e77c53699C0486a7f0e3ccbe61a",
+        "harmony_factory": "0x4Cf971c2FfC33B0eFCe9C499303Fca8Fb3bd6EA4",
+        "harmony_router": "0xc0654b6c9b81eF7d03743B8Cc5A81D3292F9a3C1",
+        "resonance_vault": "0x9FA1ceBD87bd9B3a747328964900F8007177fAF2"
       },
       "indexer": {
-        "pair_addresses": [],
-        "stabilizer_addresses": [],
-        "vault_addresses": [],
+        "pair_addresses": [
+          "0xd1d8ffc3456e4239f26e66210afc87cbb1ec2a80"
+        ],
+        "stabilizer_addresses": [
+          "0xa8Ed74cf4aBfF6c7015114228504474B7602e311"
+        ],
+        "vault_addresses": [
+          "0x9FA1ceBD87bd9B3a747328964900F8007177fAF2"
+        ],
         "start_block": "latest",
         "confirmation_depth": 3
       },
-      "pairs": [],
+      "pairs": [
+        {
+          "pair_address": "0xd1d8ffc3456e4239f26e66210afc87cbb1ec2a80",
+          "token0_address": "0x63a3530a1cb7cc64f1d40a32c7d08d82226e9163",
+          "token1_address": "0xae13d989dac2f0debff460ac112a837c89baa7cd",
+          "token0_symbol": "mUSD",
+          "token1_symbol": "WBNB",
+          "reserve0_raw": "30000000000000000000",
+          "reserve1_raw": "50000000000000000",
+          "reserve0_decimal": "30",
+          "reserve1_decimal": "0.05",
+          "reserve_block_timestamp": 1771485907,
+          "checked_at": "2026-02-19T07:25:22.512670+00:00"
+        }
+      ],
       "network_health": {
         "rpc_connected": true,
-        "latest_block": 91217610,
-        "checked_at": "2026-02-19T06:25:57.723418+00:00",
-        "discovery_status": "factory-not-configured"
+        "latest_block": 91225526,
+        "checked_at": "2026-02-19T07:25:22.512670+00:00",
+        "discovery_status": "ok",
+        "discovered_pairs": 1,
+        "factory_address": "0x4Cf971c2FfC33B0eFCe9C499303Fca8Fb3bd6EA4"
       },
       "tokens": [
         {
           "symbol": "mUSD",
           "name": "Musical USD",
-          "address": "unconfigured-musd",
+          "address": "0x63a3530a1CB7Cc64F1D40a32C7d08D82226e9163",
           "decimals": 18,
           "source": "contracts.musd"
         },
@@ -273,6 +295,27 @@
           "address": "bridge-wsol-bsc",
           "decimals": 18,
           "source": "defaults"
+        },
+        {
+          "symbol": "USDC",
+          "name": "USDC collateral",
+          "address": "0x64544969ed7EBf5f083679233325356EbE738930",
+          "decimals": 18,
+          "source": "deployed.collaterals"
+        },
+        {
+          "symbol": "USDT",
+          "name": "USDT collateral",
+          "address": "0x66E972502A34A625828C544a1914E8D8cc2A9dE5",
+          "decimals": 18,
+          "source": "deployed.collaterals"
+        },
+        {
+          "symbol": "WBNB",
+          "name": "Discovered token baa7cd",
+          "address": "0xae13d989dac2f0debff460ac112a837c89baa7cd",
+          "decimals": 18,
+          "source": "pair-discovery"
         }
       ],
       "trust_assumptions": [
@@ -283,7 +326,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -293,7 +336,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -303,12 +346,12 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T06:25:57.723418+00:00",
+          "last_checked_at": "2026-02-19T07:25:22.512670+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
       "provenance": {
-        "deployed_registry_file": null
+        "deployed_registry_file": "address-registry.bscTestnet.json"
       }
     }
   ]
