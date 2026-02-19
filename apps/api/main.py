@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from .proto_codec import ProtoCodec
 from .quote_engine import QuoteEngineError, build_quote
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 NOTES_PUBLISHED_TOTAL = Counter(
     'mcryptoex_notes_published_total',
@@ -42,6 +44,31 @@ _pg_pool: asyncpg.Pool | None = None
 _ch = None
 _producer: Producer | None = None
 _codec: ProtoCodec | None = None
+
+
+def _analytics_empty(minutes: int, warning: str | None = None) -> dict:
+    payload = {
+        'minutes': minutes,
+        'volume_by_chain_token': [],
+        'fee_revenue': [],
+        'gas_cost_averages': [],
+        'fee_breakdown_by_pool_token': [],
+        'protocol_revenue_musd_daily': [],
+        'conversion_slippage': []
+    }
+    if warning:
+        payload['warning'] = warning
+    return payload
+
+
+def _connect_clickhouse():
+    return clickhouse_connect.get_client(
+        host=settings.clickhouse_host,
+        port=settings.clickhouse_port,
+        username=settings.clickhouse_username,
+        password=settings.clickhouse_password,
+        database=settings.clickhouse_database
+    )
 
 
 class EmitSwapRequest(BaseModel):
@@ -66,13 +93,11 @@ class EmitSwapRequest(BaseModel):
 async def startup() -> None:
     global _pg_pool, _ch, _producer, _codec
     _pg_pool = await asyncpg.create_pool(dsn=settings.postgres_dsn, min_size=1, max_size=10)
-    _ch = clickhouse_connect.get_client(
-        host=settings.clickhouse_host,
-        port=settings.clickhouse_port,
-        username=settings.clickhouse_username,
-        password=settings.clickhouse_password,
-        database=settings.clickhouse_database
-    )
+    try:
+        _ch = _connect_clickhouse()
+    except Exception as exc:
+        _ch = None
+        logger.warning('ClickHouse unavailable during startup; analytics endpoints will run in degraded mode: %s', exc)
     _producer = Producer(
         {
             'bootstrap.servers': settings.kafka_bootstrap_servers,
@@ -101,9 +126,11 @@ async def health() -> dict[str, str]:
 @app.get('/health/ready')
 async def ready() -> dict[str, str]:
     assert _pg_pool is not None
-    assert _ch is not None
     async with _pg_pool.acquire() as conn:
         await conn.fetchval('SELECT 1')
+    global _ch
+    if _ch is None:
+        _ch = _connect_clickhouse()
     _ch.query('SELECT 1')
     return {'status': 'ready'}
 
@@ -359,87 +386,103 @@ async def ledger_recent(
 
 @app.get('/analytics')
 async def analytics(minutes: int = Query(default=60, ge=1, le=43200)) -> dict:
-    assert _ch is not None
+    global _ch
 
-    volume = _ch.query(
-        '''
-        SELECT bucket, chain_id, asset, sum(volume) as volume
-        FROM mcryptoex.dex_volume_by_chain_token_1m
-        WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
-        GROUP BY bucket, chain_id, asset
-        ORDER BY bucket ASC
-        ''',
-        parameters={'minutes': minutes}
-    )
+    if _ch is None:
+        try:
+            _ch = _connect_clickhouse()
+        except Exception as exc:
+            logger.warning('Analytics degraded: ClickHouse reconnect failed: %s', exc)
+            return _analytics_empty(minutes, warning='clickhouse_unavailable')
 
-    fees = _ch.query(
-        '''
-        SELECT bucket, chain_id, sum(revenue_usd) as revenue_usd
-        FROM mcryptoex.dex_fee_revenue_1m
-        WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
-        GROUP BY bucket, chain_id
-        ORDER BY bucket ASC
-        ''',
-        parameters={'minutes': minutes}
-    )
+    try:
+        volume = _ch.query(
+            '''
+            SELECT bucket, chain_id, asset, sum(volume) as volume
+            FROM mcryptoex.dex_volume_by_chain_token_1m
+            WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
+            GROUP BY bucket, chain_id, asset
+            ORDER BY bucket ASC
+            ''',
+            parameters={'minutes': minutes}
+        )
 
-    gas = _ch.query(
-        '''
-        SELECT
-          bucket,
-          chain_id,
-          sum(gas_cost_sum) / nullIf(sum(gas_cost_count), 0) as avg_gas_cost_usd
-        FROM mcryptoex.dex_gas_cost_rollup_1m
-        WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
-        GROUP BY bucket, chain_id
-        ORDER BY bucket ASC
-        ''',
-        parameters={'minutes': minutes}
-    )
+        fees = _ch.query(
+            '''
+            SELECT bucket, chain_id, sum(revenue_usd) as revenue_usd
+            FROM mcryptoex.dex_fee_revenue_1m
+            WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
+            GROUP BY bucket, chain_id
+            ORDER BY bucket ASC
+            ''',
+            parameters={'minutes': minutes}
+        )
 
-    fee_breakdown = _ch.query(
-        '''
-        SELECT
-          bucket,
-          chain_id,
-          pool_address,
-          token,
-          sum(fee_amount) AS fee_amount
-        FROM mcryptoex.dex_fee_breakdown_1m
-        WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
-        GROUP BY bucket, chain_id, pool_address, token
-        ORDER BY bucket ASC
-        ''',
-        parameters={'minutes': minutes}
-    )
+        gas = _ch.query(
+            '''
+            SELECT
+              bucket,
+              chain_id,
+              sum(gas_cost_sum) / nullIf(sum(gas_cost_count), 0) as avg_gas_cost_usd
+            FROM mcryptoex.dex_gas_cost_rollup_1m
+            WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
+            GROUP BY bucket, chain_id
+            ORDER BY bucket ASC
+            ''',
+            parameters={'minutes': minutes}
+        )
 
-    musd_revenue_daily = _ch.query(
-        '''
-        SELECT
-          bucket,
-          chain_id,
-          sum(revenue_musd) AS revenue_musd
-        FROM mcryptoex.dex_protocol_revenue_musd_1d
-        WHERE bucket >= toDate(now() - toIntervalDay(30))
-        GROUP BY bucket, chain_id
-        ORDER BY bucket ASC
-        '''
-    )
+        fee_breakdown = _ch.query(
+            '''
+            SELECT
+              bucket,
+              chain_id,
+              pool_address,
+              token,
+              sum(fee_amount) AS fee_amount
+            FROM mcryptoex.dex_fee_breakdown_1m
+            WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
+            GROUP BY bucket, chain_id, pool_address, token
+            ORDER BY bucket ASC
+            ''',
+            parameters={'minutes': minutes}
+        )
 
-    conversion_slippage = _ch.query(
-        '''
-        SELECT
-          bucket,
-          chain_id,
-          (sum(slippage_numerator) / nullIf(sum(min_out_sum), 0)) * 10000 AS slippage_bps,
-          sum(conversion_count) AS conversions
-        FROM mcryptoex.dex_conversion_slippage_rollup_1m
-        WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
-        GROUP BY bucket, chain_id
-        ORDER BY bucket ASC
-        ''',
-        parameters={'minutes': minutes}
-    )
+        musd_revenue_daily = _ch.query(
+            '''
+            SELECT
+              bucket,
+              chain_id,
+              sum(revenue_musd) AS revenue_musd
+            FROM mcryptoex.dex_protocol_revenue_musd_1d
+            WHERE bucket >= toDate(now() - toIntervalDay(30))
+            GROUP BY bucket, chain_id
+            ORDER BY bucket ASC
+            '''
+        )
+
+        conversion_slippage = _ch.query(
+            '''
+            SELECT
+              bucket,
+              chain_id,
+              (sum(slippage_numerator) / nullIf(sum(min_out_sum), 0)) * 10000 AS slippage_bps,
+              sum(conversion_count) AS conversions
+            FROM mcryptoex.dex_conversion_slippage_rollup_1m
+            WHERE bucket >= now() - toIntervalMinute(%(minutes)s)
+            GROUP BY bucket, chain_id
+            ORDER BY bucket ASC
+            ''',
+            parameters={'minutes': minutes}
+        )
+    except Exception as exc:
+        logger.warning('Analytics degraded: ClickHouse query failure: %s', exc)
+        try:
+            _ch.close()
+        except Exception:
+            pass
+        _ch = None
+        return _analytics_empty(minutes, warning='clickhouse_query_failed')
 
     def as_dicts(res):
         payload = []
