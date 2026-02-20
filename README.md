@@ -39,6 +39,7 @@ Primary docs:
 - `docs/SECURITY.md`
 - `docs/THREAT_MODEL.md`
 - `docs/MUSICAL_GLOSSARY.md`
+- `docs/DEPLOY_FREE_OCI.md` (GitHub + OCI Always Free live deployment)
 
 ## Main folders
 

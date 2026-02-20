@@ -1,0 +1,22 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$PUBLIC_DOMAIN} {
+	encode zstd gzip
+
+	# Public API prefix for web clients.
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Keep health reachable for probes without /api prefix.
+	handle /health* {
+		reverse_proxy api:8000
+	}
+
+	# Everything else serves the Next.js app.
+	handle {
+		reverse_proxy web:3000
+	}
+}

@@ -1,0 +1,47 @@
+name: deploy-oci-live
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "apps/**"
+      - "services/**"
+      - "packages/**"
+      - "scripts/**"
+      - "infra/**"
+      - "docker-compose.yml"
+      - ".github/workflows/deploy-oci-live.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy on OCI host over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USER }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          script_stop: true
+          command_timeout: 40m
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.OCI_APP_DIR }}"
+            REPO_URL="${{ secrets.OCI_REPO_URL }}"
+            if [ -z "${APP_DIR}" ]; then
+              APP_DIR="$HOME/mcryptoex"
+            fi
+            if [ -z "${REPO_URL}" ]; then
+              REPO_URL="https://github.com/${{ github.repository }}.git"
+            fi
+
+            if [ ! -d "${APP_DIR}/.git" ]; then
+              git clone "${REPO_URL}" "${APP_DIR}"
+            fi
+
+            cd "${APP_DIR}"
+            git fetch --prune origin
+            git checkout --force "${{ github.sha }}"
+
+            bash scripts/deploy/live-oci.sh

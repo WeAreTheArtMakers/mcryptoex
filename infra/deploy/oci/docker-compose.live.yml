@@ -1,0 +1,62 @@
+services:
+  redpanda:
+    ports: []
+
+  redpanda-console:
+    ports: []
+
+  postgres:
+    ports: []
+
+  clickhouse:
+    ports: []
+
+  jaeger:
+    ports: []
+
+  otel-collector:
+    ports: []
+
+  api:
+    environment:
+      ENVIRONMENT: prod
+      CORS_ORIGINS: https://${PUBLIC_DOMAIN}
+    ports: []
+    expose:
+      - '8000'
+
+  web:
+    build:
+      args:
+        NEXT_PUBLIC_TEMPO_API_BASE: https://${PUBLIC_DOMAIN}/api
+        NEXT_PUBLIC_ENABLE_LOCAL_CHAIN: "false"
+    ports: []
+    expose:
+      - '3000'
+
+  prometheus:
+    ports: []
+
+  grafana:
+    ports: []
+
+  caddy:
+    image: caddy:2.9.1-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./infra/deploy/oci/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:
