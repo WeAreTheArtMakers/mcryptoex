@@ -15,6 +15,7 @@ on:
 
 jobs:
   deploy:
+    if: ${{ secrets.OCI_HOST != '' && secrets.OCI_USER != '' && secrets.OCI_SSH_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Deploy on OCI host over SSH
