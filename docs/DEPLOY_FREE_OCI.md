@@ -103,7 +103,13 @@ Add repository secrets:
 - `OCI_APP_DIR` - optional, default `~/mcryptoex`
 - `OCI_REPO_URL` - optional (use for private repo clone URL with token/deploy key setup)
 
-On push to `main` (or manual dispatch), workflow SSHes into VM and runs:
+Workflow is configured as **manual** (`workflow_dispatch`) by default.
+After secrets are set, run it from GitHub Actions UI.
+
+If you want full auto deploy on each `main` push, add a `push` trigger in
+`.github/workflows/deploy-oci-live.yml`.
+
+The workflow SSHes into VM and runs:
 
 ```bash
 bash scripts/deploy/live-oci.sh

@@ -2,20 +2,9 @@ name: deploy-oci-live
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
-    paths:
-      - "apps/**"
-      - "services/**"
-      - "packages/**"
-      - "scripts/**"
-      - "infra/**"
-      - "docker-compose.yml"
-      - ".github/workflows/deploy-oci-live.yml"
 
 jobs:
   deploy:
-    if: ${{ secrets.OCI_HOST != '' && secrets.OCI_USER != '' && secrets.OCI_SSH_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Deploy on OCI host over SSH
