@@ -108,6 +108,7 @@ const DEFAULT_NETWORKS: NetworkItem[] = [
   { chain_id: 97, name: 'BNB Chain Testnet' },
   { chain_id: 11155111, name: 'Ethereum Sepolia' }
 ];
+const BALANCE_PERCENT_PRESETS = [25, 50, 75, 100] as const;
 
 function n(value: unknown): number {
   const parsed = Number(value);
@@ -120,6 +121,26 @@ function shortAmount(value: string): string {
   if (parsed === 0) return '0';
   if (parsed < 0.000001) return parsed.toExponential(2);
   return parsed.toFixed(6).replace(/\.?0+$/, '');
+}
+
+function formatInputAmount(value: number, decimals = 6): string {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  const precision = Math.max(0, Math.min(8, decimals));
+  return value.toFixed(precision).replace(/\.?0+$/, '');
+}
+
+function normalizeNumericInput(value: string): string {
+  return value.replace(/,/g, '.').trim();
+}
+
+function parseInputNumber(value: string): number {
+  const parsed = Number(normalizeNumericInput(value));
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function quoteByReserves(amountIn: bigint, reserveIn: bigint, reserveOut: bigint): bigint {
+  if (amountIn <= 0n || reserveIn <= 0n || reserveOut <= 0n) return 0n;
+  return (amountIn * reserveOut) / reserveIn;
 }
 
 function detail(status: number, body: unknown): string {
@@ -169,6 +190,21 @@ export default function LiquidityPage() {
   }, [chainTokens]);
 
   const selectedNetwork = useMemo(() => networks.find((x) => x.chain_id === chainId), [networks, chainId]);
+  const tokenAInfo = useMemo(() => tokenMap.get(tokenA.toUpperCase()) || null, [tokenA, tokenMap]);
+  const tokenBInfo = useMemo(() => tokenMap.get(tokenB.toUpperCase()) || null, [tokenB, tokenMap]);
+  const addPair = useMemo(() => {
+    const a = tokenA.toUpperCase();
+    const b = tokenB.toUpperCase();
+    return (
+      pairs.find((pair) => {
+        const p0 = pair.token0_symbol.toUpperCase();
+        const p1 = pair.token1_symbol.toUpperCase();
+        return (p0 === a && p1 === b) || (p0 === b && p1 === a);
+      }) || null
+    );
+  }, [pairs, tokenA, tokenB]);
+  const tokenABalance = useMemo(() => n(balances[tokenA] || '0'), [balances, tokenA]);
+  const tokenBBalance = useMemo(() => n(balances[tokenB] || '0'), [balances, tokenB]);
   const selectedPair = useMemo(
     () => pairs.find((pair) => pair.pool_address.toLowerCase() === removePairAddress.toLowerCase()) || null,
     [pairs, removePairAddress]
@@ -328,7 +364,10 @@ export default function LiquidityPage() {
       functionName: 'approve',
       args: [spender, maxUint256]
     });
-    await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    if (approveReceipt.status !== 'success') {
+      throw new Error(`Approve reverted on-chain for ${token.symbol}. Tx: ${approveHash}`);
+    }
   }
 
   async function handleAddLiquidity() {
@@ -356,14 +395,13 @@ export default function LiquidityPage() {
       return;
     }
 
-    const tokenAInfo = tokenMap.get(tokenA.toUpperCase());
-    const tokenBInfo = tokenMap.get(tokenB.toUpperCase());
-
     if (!tokenAInfo || !tokenBInfo || !isAddress(tokenAInfo.address) || !isAddress(tokenBInfo.address)) {
       setAddError('Selected token address is not EVM-compatible on this chain.');
       return;
     }
-    if (Number(amountA) <= 0 || Number(amountB) <= 0) {
+    const normalizedAmountA = normalizeNumericInput(amountA);
+    const normalizedAmountB = normalizeNumericInput(amountB);
+    if (parseInputNumber(normalizedAmountA) <= 0 || parseInputNumber(normalizedAmountB) <= 0) {
       setAddError('Amounts must be greater than zero.');
       return;
     }
@@ -372,11 +410,48 @@ export default function LiquidityPage() {
 
     try {
       setLoading(true);
-      const amountARaw = parseUnits(amountA, tokenAInfo.decimals);
-      const amountBRaw = parseUnits(amountB, tokenBInfo.decimals);
-      const amountAMin = (amountARaw * BigInt(10_000 - slippageBps)) / 10_000n;
-      const amountBMin = (amountBRaw * BigInt(10_000 - slippageBps)) / 10_000n;
+      const amountARaw = parseUnits(normalizedAmountA, tokenAInfo.decimals);
+      const amountBRaw = parseUnits(normalizedAmountB, tokenBInfo.decimals);
+      let expectedAmountARaw = amountARaw;
+      let expectedAmountBRaw = amountBRaw;
+
+      if (addPair) {
+        const pairToken0 = addPair.token0_symbol.toUpperCase();
+        const pairToken1 = addPair.token1_symbol.toUpperCase();
+        const pairToken0Info = tokenMap.get(pairToken0);
+        const pairToken1Info = tokenMap.get(pairToken1);
+        if (pairToken0Info && pairToken1Info) {
+          const reserve0Raw = parseUnits(addPair.reserve0_decimal || '0', pairToken0Info.decimals);
+          const reserve1Raw = parseUnits(addPair.reserve1_decimal || '0', pairToken1Info.decimals);
+          const tokenAIsToken0 = tokenA.toUpperCase() === pairToken0;
+          const reserveARaw = tokenAIsToken0 ? reserve0Raw : reserve1Raw;
+          const reserveBRaw = tokenAIsToken0 ? reserve1Raw : reserve0Raw;
+
+          if (reserveARaw > 0n && reserveBRaw > 0n) {
+            const amountBOptimal = quoteByReserves(amountARaw, reserveARaw, reserveBRaw);
+            if (amountBOptimal > 0n && amountBOptimal <= amountBRaw) {
+              expectedAmountARaw = amountARaw;
+              expectedAmountBRaw = amountBOptimal;
+            } else {
+              const amountAOptimal = quoteByReserves(amountBRaw, reserveBRaw, reserveARaw);
+              if (amountAOptimal > 0n && amountAOptimal <= amountARaw) {
+                expectedAmountARaw = amountAOptimal;
+                expectedAmountBRaw = amountBRaw;
+              }
+            }
+          }
+        }
+      }
+
+      const amountAMin = (expectedAmountARaw * BigInt(10_000 - slippageBps)) / 10_000n;
+      const amountBMin = (expectedAmountBRaw * BigInt(10_000 - slippageBps)) / 10_000n;
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 1_200);
+
+      if (expectedAmountARaw !== amountARaw || expectedAmountBRaw !== amountBRaw) {
+        setAddStatus(
+          `Pool ratio detected. Expected fill ~ ${shortAmount(formatUnits(expectedAmountARaw, tokenAInfo.decimals))} ${tokenAInfo.symbol} + ${shortAmount(formatUnits(expectedAmountBRaw, tokenBInfo.decimals))} ${tokenBInfo.symbol}`
+        );
+      }
 
       setAddStatus('Approving token A...');
       await ensureAllowance(tokenAInfo, router, amountARaw);
@@ -400,7 +475,10 @@ export default function LiquidityPage() {
           deadline
         ]
       });
-      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      if (receipt.status !== 'success') {
+        throw new Error(`Add liquidity reverted on-chain. Tx: ${txHash}`);
+      }
       setAddStatus(`Liquidity added: ${txHash}`);
       setReloadNonce((v) => v + 1);
     } catch (error) {
@@ -434,7 +512,8 @@ export default function LiquidityPage() {
       setRemoveError('Select a valid pool first.');
       return;
     }
-    if (Number(removeLiquidityAmount) <= 0) {
+    const normalizedRemoveAmount = normalizeNumericInput(removeLiquidityAmount);
+    if (parseInputNumber(normalizedRemoveAmount) <= 0) {
       setRemoveError('LP amount must be greater than zero.');
       return;
     }
@@ -456,7 +535,7 @@ export default function LiquidityPage() {
       setLoading(true);
       const router = selectedNetwork.router_address as Address;
       const pairAddress = selectedPair.pool_address as Address;
-      const liquidityRaw = parseUnits(removeLiquidityAmount, 18);
+      const liquidityRaw = parseUnits(normalizedRemoveAmount, 18);
 
       const reserves = (await publicClient.readContract({
         address: pairAddress,
@@ -498,7 +577,10 @@ export default function LiquidityPage() {
           functionName: 'approve',
           args: [router, maxUint256]
         });
-        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        if (approveReceipt.status !== 'success') {
+          throw new Error(`LP approve reverted on-chain. Tx: ${approveHash}`);
+        }
       }
 
       setRemoveStatus('Submitting remove-liquidity transaction...');
@@ -509,7 +591,10 @@ export default function LiquidityPage() {
         functionName: 'removeLiquidity',
         args: [tokenAAddress, tokenBAddress, liquidityRaw, amountAMin, amountBMin, address, deadline]
       });
-      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      if (receipt.status !== 'success') {
+        throw new Error(`Remove liquidity reverted on-chain. Tx: ${txHash}`);
+      }
       setRemoveStatus(`Liquidity removed: ${txHash}`);
       setReloadNonce((v) => v + 1);
     } catch (error) {
@@ -524,6 +609,21 @@ export default function LiquidityPage() {
     const totalFees = pairs.reduce((sum, row) => sum + n(row.total_fee_usd), 0);
     return { totalSwaps, totalFees };
   }, [pairs]);
+
+  function applyAmountPreset(target: 'A' | 'B', percent: number) {
+    if (target === 'A') {
+      const next = (tokenABalance * percent) / 100;
+      setAmountA(formatInputAmount(next, tokenAInfo?.decimals || 6));
+      return;
+    }
+    const next = (tokenBBalance * percent) / 100;
+    setAmountB(formatInputAmount(next, tokenBInfo?.decimals || 6));
+  }
+
+  function applyRemoveLpPreset(percent: number) {
+    const next = (n(lpBalance) * percent) / 100;
+    setRemoveLiquidityAmount(formatInputAmount(next, 18));
+  }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1.7fr_1fr]">
@@ -626,6 +726,23 @@ export default function LiquidityPage() {
                   onChange={(event) => setAmountA(event.target.value)}
                   className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
                 />
+                <div className="flex items-center justify-between text-[11px] text-slate-300">
+                  <span>
+                    Wallet: <span className="font-mono">{shortAmount(String(tokenABalance))}</span> {tokenA}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {BALANCE_PERCENT_PRESETS.map((percent) => (
+                    <button
+                      key={`amountA-${percent}`}
+                      type="button"
+                      onClick={() => applyAmountPreset('A', percent)}
+                      className="rounded-md border border-slateblue/60 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-200 hover:border-mint/70 hover:text-mint"
+                    >
+                      %{percent}
+                    </button>
+                  ))}
+                </div>
               </label>
               <label className="space-y-1">
                 <span className="text-xs uppercase tracking-[0.14em] text-slate-300">Amount B</span>
@@ -637,6 +754,23 @@ export default function LiquidityPage() {
                   onChange={(event) => setAmountB(event.target.value)}
                   className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
                 />
+                <div className="flex items-center justify-between text-[11px] text-slate-300">
+                  <span>
+                    Wallet: <span className="font-mono">{shortAmount(String(tokenBBalance))}</span> {tokenB}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {BALANCE_PERCENT_PRESETS.map((percent) => (
+                    <button
+                      key={`amountB-${percent}`}
+                      type="button"
+                      onClick={() => applyAmountPreset('B', percent)}
+                      className="rounded-md border border-slateblue/60 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-200 hover:border-mint/70 hover:text-mint"
+                    >
+                      %{percent}
+                    </button>
+                  ))}
+                </div>
               </label>
             </div>
 
@@ -691,6 +825,18 @@ export default function LiquidityPage() {
                 onChange={(event) => setRemoveLiquidityAmount(event.target.value)}
                 className="w-full rounded-lg border border-slateblue/70 bg-slate-950/80 px-3 py-2"
               />
+              <div className="mt-1 flex flex-wrap gap-1">
+                {BALANCE_PERCENT_PRESETS.map((percent) => (
+                  <button
+                    key={`remove-lp-${percent}`}
+                    type="button"
+                    onClick={() => applyRemoveLpPreset(percent)}
+                    className="rounded-md border border-slateblue/60 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-200 hover:border-cyan-300/70 hover:text-cyan-200"
+                  >
+                    %{percent}
+                  </button>
+                ))}
+              </div>
             </label>
 
             <div className="mt-3 rounded-lg border border-slateblue/50 bg-slate-900/50 p-3 text-xs text-slate-200">

@@ -49,14 +49,15 @@ const WRAPPED_NATIVE_DEFAULTS: Record<number, string> = {
   11155111: '0xfff9976782d46cc05630d1f6ebab18b2324d6b14' // WETH (Sepolia)
 };
 
-const DEFAULT_MAJOR_TARGET_SYMBOLS = ['WBTC', 'WETH', 'WSOL', 'WAVAX'];
+const DEFAULT_MAJOR_TARGET_SYMBOLS = ['WBTC', 'WETH', 'WSOL', 'WAVAX', 'MODX'];
 
 const DEFAULT_TARGET_DECIMALS: Record<string, number> = {
   WBTC: 8,
   WETH: 18,
   WBNB: 18,
   WSOL: 9,
-  WAVAX: 18
+  WAVAX: 18,
+  MODX: 18
 };
 
 const DEFAULT_TARGET_NAMES: Record<string, string> = {
@@ -64,7 +65,8 @@ const DEFAULT_TARGET_NAMES: Record<string, string> = {
   WETH: 'Wrapped Ether',
   WBNB: 'Wrapped BNB',
   WSOL: 'Wrapped SOL',
-  WAVAX: 'Wrapped AVAX'
+  WAVAX: 'Wrapped AVAX',
+  MODX: 'modX Token'
 };
 
 const WRAPPED_NATIVE_ABI = [
@@ -73,6 +75,16 @@ const WRAPPED_NATIVE_ABI = [
   'function decimals() view returns (uint8)',
   'function balanceOf(address) view returns (uint256)',
   'function approve(address,uint256) returns (bool)'
+] as const;
+
+const EXTERNAL_ROUTER_BY_CHAIN: Record<number, string> = {
+  97: '0x9ac64cc6e4415144c455bd8e4837fea55603e5c3' // PancakeSwap Router (BSC testnet)
+};
+
+const EXTERNAL_ROUTER_ABI = [
+  'function getAmountsOut(uint256,address[]) view returns (uint256[])',
+  'function getAmountsIn(uint256,address[]) view returns (uint256[])',
+  'function swapExactTokensForTokens(uint256,uint256,address[],address,uint256) returns (uint256[])'
 ] as const;
 
 const FACTORY_PAIRS_ABI = ['function allPairsLength() view returns (uint256)', 'function allPairs(uint256) view returns (address)'] as const;
@@ -143,6 +155,21 @@ function amountEnv(name: string, defaultValue: string): string {
   return value.trim();
 }
 
+function bpsEnv(name: string, defaultValue: number): bigint {
+  const raw = process.env[name];
+  if (!raw || !raw.trim()) return BigInt(defaultValue);
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed)) return BigInt(defaultValue);
+  const clamped = Math.min(10_000, Math.max(0, parsed));
+  return BigInt(clamped);
+}
+
+function applyMinBps(amount: bigint, minBps: bigint): bigint {
+  if (minBps <= 0n) return 0n;
+  if (minBps >= 10_000n) return amount;
+  return (amount * minBps) / 10_000n;
+}
+
 function amountEnvForSymbol(prefix: string, symbol: string, fallbackKey: string, defaultValue: string): string {
   const key = `${prefix}_${normalizeSymbolEnvKey(symbol)}_AMOUNT`;
   return amountEnv(key, amountEnv(fallbackKey, defaultValue));
@@ -207,12 +234,20 @@ function scaleAmount(amount: bigint, fromDecimals: number, toDecimals: number): 
   return amount / factor;
 }
 
-async function deployMockTargetToken(symbol: string, decimals: number): Promise<string> {
+async function deployMockTargetToken(symbol: string, decimals: number, recipient: string): Promise<string> {
   const MockERC20 = await ethers.getContractFactory('MockERC20');
   const name = DEFAULT_TARGET_NAMES[normalizeSymbol(symbol)] || `${symbol} Token`;
   const token = await MockERC20.deploy(name, symbol, decimals);
   await token.waitForDeployment();
-  return token.getAddress();
+  const tokenAddress = await token.getAddress();
+  try {
+    const mintable = await ethers.getContractAt(['function mint(address,uint256) external'], tokenAddress);
+    const seedAmount = ethers.parseUnits('1000', decimals);
+    await (await mintable.mint(recipient, seedAmount)).wait();
+  } catch {
+    // Seed mint is best-effort; ensureTokenBalance handles follow-up mint attempts.
+  }
+  return tokenAddress;
 }
 
 function dedupeCollaterals(items: CollateralConfig[]): CollateralConfig[] {
@@ -232,18 +267,24 @@ function dedupeCollaterals(items: CollateralConfig[]): CollateralConfig[] {
 function persistTargetRegistry(
   registryPath: string,
   registry: Registry,
-  createdPools: Array<{ symbol: string; token: string; pair: string }>
+  createdPools: Array<{ symbol: string; token: string; pair: string; decimals?: number }>
 ): void {
   const writeTargets = boolEnv('BOOTSTRAP_WRITE_TARGETS_TO_REGISTRY', true);
   if (!writeTargets) return;
 
-  const byToken = new Map<string, { symbol: string; token: string; pair?: string }>();
+  const byToken = new Map<string, { symbol: string; token: string; pair?: string; decimals?: number }>();
   const existingTargets = Array.isArray(registry.targets) ? registry.targets : [];
   for (const item of existingTargets) {
     const token = String(item?.token || '').trim();
     if (!ethers.isAddress(token)) continue;
     const symbol = normalizeSymbol(String(item?.symbol || tokenAddressLabel(token)));
-    byToken.set(token.toLowerCase(), { symbol, token, pair: String(item?.pair || '').trim() || undefined });
+    const decimals = Number(item?.decimals);
+    byToken.set(token.toLowerCase(), {
+      symbol,
+      token,
+      pair: String(item?.pair || '').trim() || undefined,
+      decimals: Number.isFinite(decimals) ? decimals : undefined
+    });
   }
 
   for (const pool of createdPools) {
@@ -251,7 +292,12 @@ function persistTargetRegistry(
     if (!ethers.isAddress(token)) continue;
     const symbol = normalizeSymbol(pool.symbol);
     if (symbol === 'MUSD') continue;
-    byToken.set(token.toLowerCase(), { symbol, token, pair: pool.pair });
+    byToken.set(token.toLowerCase(), {
+      symbol,
+      token,
+      pair: pool.pair,
+      decimals: Number.isFinite(Number(pool.decimals)) ? Number(pool.decimals) : undefined
+    });
   }
 
   const targets = Array.from(byToken.values()).sort((a, b) => a.symbol.localeCompare(b.symbol));
@@ -371,10 +417,11 @@ async function main(): Promise<void> {
   const stabilizer = await ethers.getContractAt('Stabilizer', registry.contracts.stabilizer);
   const factory = await ethers.getContractAt('HarmonyFactory', registry.contracts.harmonyFactory);
   const router = await ethers.getContractAt('HarmonyRouter', registry.contracts.harmonyRouter);
+  const minLiquidityBps = bpsEnv('BOOTSTRAP_MIN_LIQUIDITY_BPS', 9900);
 
   const collateralTargets = resolveCollateralTargets(registry);
   const deadline = Math.floor(Date.now() / 1000) + 1800;
-  const createdPools: Array<{ symbol: string; token: string; pair: string }> = [];
+  const createdPools: Array<{ symbol: string; token: string; pair: string; decimals?: number }> = [];
   const handledTokenAddresses = new Set<string>();
   const collateralBySymbol = new Map<string, { token: string; decimals: number }>();
   const mintSources: Array<{ token: string; symbol: string; decimals: number }> = [];
@@ -382,7 +429,16 @@ async function main(): Promise<void> {
   const chainId = Number(network.config.chainId || 0);
   const wrappedNativeTokenAddress =
     process.env.BOOTSTRAP_WRAPPED_NATIVE_TOKEN?.trim() || WRAPPED_NATIVE_DEFAULTS[chainId] || '';
+  const externalRouterAddress =
+    process.env.BOOTSTRAP_EXTERNAL_ROUTER_ADDRESS?.trim() || EXTERNAL_ROUTER_BY_CHAIN[chainId] || '';
+  const externalSwapSlippageBps = bpsEnv('BOOTSTRAP_EXTERNAL_SWAP_SLIPPAGE_BPS', 1000);
+  const externalSwapBufferBps = bpsEnv('BOOTSTRAP_EXTERNAL_SWAP_BUFFER_BPS', 1200);
+  const externalSwapMaxWrapped = amountEnv('BOOTSTRAP_EXTERNAL_SWAP_MAX_WRAPPED_NATIVE', '2');
+  const wrappedNativeDecimalsForSwap = network.name.includes('bsc') ? 18 : 18;
+  const externalSwapMaxWrappedRaw = ethers.parseUnits(externalSwapMaxWrapped, wrappedNativeDecimalsForSwap);
   const existingTokenBySymbol = new Map<string, string>();
+  const minterRole = ethers.keccak256(ethers.toUtf8Bytes('MINTER_ROLE'));
+  const canDirectMintMusd = await musd.hasRole(minterRole, deployer.address).catch(() => false);
 
   try {
     const factoryPairs = await ethers.getContractAt(FACTORY_PAIRS_ABI, await factory.getAddress());
@@ -408,8 +464,18 @@ async function main(): Promise<void> {
   }
 
   async function ensureMusdBalance(requiredMusdRaw: bigint): Promise<boolean> {
-    const current = await musd.balanceOf(deployer.address);
+    let current = await musd.balanceOf(deployer.address);
     if (current >= requiredMusdRaw) return true;
+
+    if (canDirectMintMusd) {
+      const deficit = requiredMusdRaw - current;
+      if (deficit > 0n) {
+        await (await musd.mint(deployer.address, deficit)).wait();
+        current = await musd.balanceOf(deployer.address);
+        console.log(`mUSD topped up via direct mint: +${ethers.formatEther(deficit)} balance=${ethers.formatEther(current)}`);
+      }
+      if (current >= requiredMusdRaw) return true;
+    }
 
     if (!mintSources.length) {
       console.log(
@@ -446,14 +512,27 @@ async function main(): Promise<void> {
       }
 
       const sourceToken = await ethers.getContractAt('IERC20Metadata', source.token);
-      await (await sourceToken.approve(await stabilizer.getAddress(), collateralWithBuffer)).wait();
-      await (await stabilizer.mintWithCollateral(source.token, collateralWithBuffer, 0, deployer.address)).wait();
-      available = await musd.balanceOf(deployer.address);
-      console.log(
-        `mUSD topped up via ${source.symbol}: collateral=${ethers.formatUnits(collateralWithBuffer, source.decimals)} balance=${ethers.formatEther(
-          available
-        )}`
-      );
+      try {
+        await (await sourceToken.approve(await stabilizer.getAddress(), collateralWithBuffer)).wait();
+        await (await stabilizer.mintWithCollateral(source.token, collateralWithBuffer, 0, deployer.address)).wait();
+        available = await musd.balanceOf(deployer.address);
+        console.log(
+          `mUSD topped up via ${source.symbol}: collateral=${ethers.formatUnits(collateralWithBuffer, source.decimals)} balance=${ethers.formatEther(
+            available
+          )}`
+        );
+      } catch (error) {
+        console.log(`mUSD top-up via ${source.symbol} collateral mint failed; trying fallback`);
+        console.log(String(error));
+        if (canDirectMintMusd) {
+          const fallbackDeficit = requiredMusdRaw - available;
+          if (fallbackDeficit > 0n) {
+            await (await musd.mint(deployer.address, fallbackDeficit)).wait();
+            available = await musd.balanceOf(deployer.address);
+            console.log(`mUSD topped up via direct mint fallback: +${ethers.formatEther(fallbackDeficit)} balance=${ethers.formatEther(available)}`);
+          }
+        }
+      }
     }
 
     if (available < requiredMusdRaw) {
@@ -463,6 +542,168 @@ async function main(): Promise<void> {
       return false;
     }
     return true;
+  }
+
+  async function addLiquidityWithFallback(params: {
+    symbol: string;
+    tokenAddress: string;
+    desiredMusd: bigint;
+    desiredToken: bigint;
+    minMusd: bigint;
+    minToken: bigint;
+  }): Promise<boolean> {
+    const routerAddress = await router.getAddress();
+    const musdAddress = await musd.getAddress();
+    try {
+      await (
+        await router.addLiquidity(
+          musdAddress,
+          params.tokenAddress,
+          params.desiredMusd,
+          params.desiredToken,
+          params.minMusd,
+          params.minToken,
+          deployer.address,
+          deadline
+        )
+      ).wait();
+      return true;
+    } catch (error) {
+      console.log(`addLiquidity primary path failed for ${params.symbol}; retrying with relaxed minimums`);
+      console.log(String(error));
+    }
+
+    try {
+      await (
+        await router.addLiquidity(
+          musdAddress,
+          params.tokenAddress,
+          params.desiredMusd,
+          params.desiredToken,
+          0,
+          0,
+          deployer.address,
+          deadline
+        )
+      ).wait();
+      return true;
+    } catch (error) {
+      console.log(`addLiquidity fallback path failed for ${params.symbol}`);
+      console.log(String(error));
+      console.log(
+        `skipping ${params.symbol} pool after retries router=${routerAddress} token=${params.tokenAddress}`
+      );
+      return false;
+    }
+  }
+
+  async function tryAcquireTargetFromExternalRouter(
+    tokenAddress: string,
+    symbol: string,
+    requiredRaw: bigint
+  ): Promise<boolean> {
+    if (!boolEnv('BOOTSTRAP_ENABLE_EXTERNAL_ROUTER_SWAP', true)) return false;
+    if (!externalRouterAddress || !ethers.isAddress(externalRouterAddress)) return false;
+    if (!wrappedNativeTokenAddress || !ethers.isAddress(wrappedNativeTokenAddress)) return false;
+    if (tokenAddress.toLowerCase() === wrappedNativeTokenAddress.toLowerCase()) return false;
+
+    const targetToken = await ethers.getContractAt('IERC20Metadata', tokenAddress);
+    const wrapped = await ethers.getContractAt(WRAPPED_NATIVE_ABI, wrappedNativeTokenAddress);
+    const externalRouter = await ethers.getContractAt(EXTERNAL_ROUTER_ABI, externalRouterAddress);
+
+    const current = await targetToken.balanceOf(deployer.address);
+    if (current >= requiredRaw) return true;
+    const deficit = requiredRaw - current;
+    if (deficit <= 0n) return true;
+
+    let amountInQuoted = 0n;
+    try {
+      const amountsIn = (await externalRouter.getAmountsIn(deficit, [wrappedNativeTokenAddress, tokenAddress])) as bigint[];
+      amountInQuoted = amountsIn[0];
+    } catch (error) {
+      console.log(`external router getAmountsIn unavailable for ${symbol}; trying fixed-size quote`);
+      console.log(String(error));
+      try {
+        const amountsOut = (await externalRouter.getAmountsOut(
+          externalSwapMaxWrappedRaw,
+          [wrappedNativeTokenAddress, tokenAddress]
+        )) as bigint[];
+        const maxOut = amountsOut[amountsOut.length - 1];
+        if (maxOut > 0n) {
+          amountInQuoted = externalSwapMaxWrappedRaw;
+        }
+      } catch (innerError) {
+        console.log(`external router fixed-size quote failed for ${symbol}`);
+        console.log(String(innerError));
+        return false;
+      }
+    }
+    if (amountInQuoted <= 0n) return false;
+
+    const bufferedIn = amountInQuoted + (amountInQuoted * externalSwapBufferBps) / 10_000n;
+    const amountIn = bufferedIn > 0n ? bufferedIn : amountInQuoted;
+    if (externalSwapMaxWrappedRaw > 0n && amountIn > externalSwapMaxWrappedRaw) {
+      console.log(
+        `external router swap skipped for ${symbol}: required wrapped native ${ethers.formatUnits(
+          amountIn,
+          wrappedNativeDecimalsForSwap
+        )} exceeds max ${ethers.formatUnits(externalSwapMaxWrappedRaw, wrappedNativeDecimalsForSwap)}`
+      );
+      return false;
+    }
+
+    const wrappedBalance = await wrapped.balanceOf(deployer.address);
+    if (wrappedBalance < amountIn) {
+      const wrapDeficit = amountIn - wrappedBalance;
+      const nativeBalance = await ethers.provider.getBalance(deployer.address);
+      if (nativeBalance < wrapDeficit) {
+        console.log(
+          `external router swap skipped for ${symbol}: insufficient native for wrap required=${ethers.formatEther(
+            wrapDeficit
+          )} available=${ethers.formatEther(nativeBalance)}`
+        );
+        return false;
+      }
+      await (await wrapped.deposit({ value: wrapDeficit })).wait();
+      console.log(`wrapped native for external swap ${symbol}: +${ethers.formatUnits(wrapDeficit, wrappedNativeDecimalsForSwap)}`);
+    }
+
+    const wrappedAsErc20 = await ethers.getContractAt('IERC20Metadata', wrappedNativeTokenAddress);
+    await (await wrappedAsErc20.approve(externalRouterAddress, amountIn)).wait();
+
+    let minOut = deficit;
+    try {
+      const amountsOut = (await externalRouter.getAmountsOut(amountIn, [wrappedNativeTokenAddress, tokenAddress])) as bigint[];
+      const expectedOut = amountsOut[amountsOut.length - 1];
+      minOut = applyMinBps(expectedOut, 10_000n - externalSwapSlippageBps);
+    } catch {
+      minOut = applyMinBps(deficit, 10_000n - externalSwapSlippageBps);
+    }
+
+    const swapDeadline = Math.floor(Date.now() / 1000) + 1800;
+    try {
+      await (
+        await externalRouter.swapExactTokensForTokens(
+          amountIn,
+          minOut,
+          [wrappedNativeTokenAddress, tokenAddress],
+          deployer.address,
+          swapDeadline
+        )
+      ).wait();
+    } catch (error) {
+      console.log(`external router swap failed for ${symbol}`);
+      console.log(String(error));
+      return false;
+    }
+
+    const after = await targetToken.balanceOf(deployer.address);
+    if (after >= requiredRaw) {
+      console.log(`acquired ${symbol} via external router: +${ethers.formatUnits(after - current, await targetToken.decimals())}`);
+      return true;
+    }
+    console.log(`external router swap produced insufficient ${symbol} balance required=${requiredRaw.toString()} available=${after.toString()}`);
+    return false;
   }
 
   for (const target of collateralTargets) {
@@ -483,14 +724,29 @@ async function main(): Promise<void> {
       continue;
     }
 
-    await (await collateral.approve(await stabilizer.getAddress(), mintRaw)).wait();
-    await (await stabilizer.mintWithCollateral(tokenAddress, mintRaw, 0, deployer.address)).wait();
+    let collateralMinted = false;
+    try {
+      await (await collateral.approve(await stabilizer.getAddress(), mintRaw)).wait();
+      await (await stabilizer.mintWithCollateral(tokenAddress, mintRaw, 0, deployer.address)).wait();
+      collateralMinted = true;
+    } catch (error) {
+      console.log(`collateral mint path failed for ${symbol}; fallback mode engaged`);
+      console.log(String(error));
+    }
 
     const lpTokenAmount = amountEnvForSymbol('BOOTSTRAP_LP', symbol, 'BOOTSTRAP_LP_COLLATERAL_AMOUNT', '40');
     const lpMusdAmount = amountEnvForSymbol('BOOTSTRAP_LP_MUSD', symbol, 'BOOTSTRAP_LP_MUSD_AMOUNT', '40');
 
     const lpTokenRaw = ethers.parseUnits(lpTokenAmount, decimals);
     const lpMusdRaw = ethers.parseEther(lpMusdAmount);
+
+    if (!collateralMinted && canDirectMintMusd) {
+      const directMintAmount = lpMusdRaw + lpMusdRaw / 2n;
+      if (directMintAmount > 0n) {
+        await (await musd.mint(deployer.address, directMintAmount)).wait();
+        console.log(`mUSD direct mint fallback for ${symbol}: +${ethers.formatEther(directMintAmount)}`);
+      }
+    }
 
     const canProvideLpToken = await ensureTokenBalance(tokenAddress, deployer.address, lpTokenRaw, symbol, decimals);
     if (!canProvideLpToken) {
@@ -512,24 +768,23 @@ async function main(): Promise<void> {
     await (await collateral.approve(await router.getAddress(), lpTokenRaw)).wait();
     await (await musd.approve(await router.getAddress(), lpMusdRaw)).wait();
 
-    const minMusd = (lpMusdRaw * 99n) / 100n;
-    const minCollateral = (lpTokenRaw * 99n) / 100n;
+    const minMusd = applyMinBps(lpMusdRaw, minLiquidityBps);
+    const minCollateral = applyMinBps(lpTokenRaw, minLiquidityBps);
 
-    await (
-      await router.addLiquidity(
-        await musd.getAddress(),
-        tokenAddress,
-        lpMusdRaw,
-        lpTokenRaw,
-        minMusd,
-        minCollateral,
-        deployer.address,
-        deadline
-      )
-    ).wait();
+    const collateralLpAdded = await addLiquidityWithFallback({
+      symbol,
+      tokenAddress,
+      desiredMusd: lpMusdRaw,
+      desiredToken: lpTokenRaw,
+      minMusd,
+      minToken: minCollateral
+    });
+    if (!collateralLpAdded) {
+      continue;
+    }
 
     const pair = await factory.getPair(await musd.getAddress(), tokenAddress);
-    createdPools.push({ symbol, token: tokenAddress, pair });
+    createdPools.push({ symbol, token: tokenAddress, pair, decimals });
     handledTokenAddresses.add(tokenAddress.toLowerCase());
     console.log(`added LP: ${symbol} pair=${pair}`);
   }
@@ -567,26 +822,25 @@ async function main(): Promise<void> {
         await (await wrapped.approve(await router.getAddress(), wrappedRaw)).wait();
         await (await musd.approve(await router.getAddress(), musdForWrapped)).wait();
 
-        const minWrapped = (wrappedRaw * 99n) / 100n;
-        const minMusd = (musdForWrapped * 99n) / 100n;
+        const minWrapped = applyMinBps(wrappedRaw, minLiquidityBps);
+        const minMusd = applyMinBps(musdForWrapped, minLiquidityBps);
 
-        await (
-          await router.addLiquidity(
-            await musd.getAddress(),
-            wrappedNativeTokenAddress,
-            musdForWrapped,
-            wrappedRaw,
-            minMusd,
-            minWrapped,
-            deployer.address,
-            deadline
-          )
-        ).wait();
-
-        const pair = await factory.getPair(await musd.getAddress(), wrappedNativeTokenAddress);
-        createdPools.push({ symbol, token: wrappedNativeTokenAddress, pair });
-        handledTokenAddresses.add(wrappedNativeTokenAddress.toLowerCase());
-        console.log(`added LP: ${symbol} pair=${pair}`);
+        const wrappedLpAdded = await addLiquidityWithFallback({
+          symbol,
+          tokenAddress: wrappedNativeTokenAddress,
+          desiredMusd: musdForWrapped,
+          desiredToken: wrappedRaw,
+          minMusd,
+          minToken: minWrapped
+        });
+        if (!wrappedLpAdded) {
+          console.log(`skip ${symbol} pool: addLiquidity failed after retries`);
+        } else {
+          const pair = await factory.getPair(await musd.getAddress(), wrappedNativeTokenAddress);
+          createdPools.push({ symbol, token: wrappedNativeTokenAddress, pair, decimals });
+          handledTokenAddresses.add(wrappedNativeTokenAddress.toLowerCase());
+          console.log(`added LP: ${symbol} pair=${pair}`);
+        }
       } else {
         console.log(
           `skip ${symbol} pool: balances insufficient mUSD=${ethers.formatEther(musdBalance)} ${symbol}=${ethers.formatUnits(
@@ -604,14 +858,23 @@ async function main(): Promise<void> {
       .filter((symbol, index, all) => symbol.length > 0 && all.indexOf(symbol) === index);
 
     const deployMocks = boolEnv('BOOTSTRAP_DEPLOY_MOCK_TARGETS', true);
+    const forceMockSymbols = new Set(
+      parseCsv(process.env.BOOTSTRAP_FORCE_MOCK_SYMBOLS)
+        .map(normalizeSymbol)
+        .filter(Boolean)
+    );
     const defaultWrappedSymbol = network.name.includes('bsc') ? 'WBNB' : 'WETH';
 
     for (const symbol of targetSymbols) {
       let tokenAddress = '';
       let decimals = DEFAULT_TARGET_DECIMALS[symbol] || 18;
 
+      const forceMock = forceMockSymbols.has(symbol);
+
       const envAddress = tokenAddressEnvForSymbol(symbol);
-      if (envAddress && ethers.isAddress(envAddress)) {
+      if (forceMock) {
+        tokenAddress = '';
+      } else if (envAddress && ethers.isAddress(envAddress)) {
         tokenAddress = envAddress;
       } else if (collateralBySymbol.has(symbol)) {
         const known = collateralBySymbol.get(symbol)!;
@@ -629,7 +892,7 @@ async function main(): Promise<void> {
 
       if (!tokenAddress && deployMocks) {
         try {
-          tokenAddress = await deployMockTargetToken(symbol, decimals);
+          tokenAddress = await deployMockTargetToken(symbol, decimals, deployer.address);
           console.log(`deployed mock target token ${symbol}: ${tokenAddress}`);
         } catch (error) {
           console.log(`failed to deploy mock target token ${symbol}`);
@@ -664,44 +927,68 @@ async function main(): Promise<void> {
       const lpTokenRaw = ethers.parseUnits(lpTokenAmount, decimals);
       const lpMusdRaw = ethers.parseEther(lpMusdAmount);
 
-      const canProvideToken = await ensureTokenBalance(tokenAddress, deployer.address, lpTokenRaw, symbol, decimals);
+      let effectiveLpTokenRaw = lpTokenRaw;
+      let effectiveLpMusdRaw = lpMusdRaw;
+      let canProvideToken = await ensureTokenBalance(tokenAddress, deployer.address, effectiveLpTokenRaw, symbol, decimals);
       if (!canProvideToken) {
+        await tryAcquireTargetFromExternalRouter(tokenAddress, symbol, effectiveLpTokenRaw);
+        const tokenBalanceAfterAcquire = await token.balanceOf(deployer.address);
+        if (tokenBalanceAfterAcquire <= 0n) {
+          console.log(`skip LP for ${symbol}: token balance is insufficient`);
+          continue;
+        }
+        if (boolEnv('BOOTSTRAP_ALLOW_PARTIAL_TARGET_LP', true)) {
+          effectiveLpTokenRaw = tokenBalanceAfterAcquire < lpTokenRaw ? tokenBalanceAfterAcquire : lpTokenRaw;
+          effectiveLpMusdRaw = (lpMusdRaw * effectiveLpTokenRaw) / lpTokenRaw;
+          if (effectiveLpMusdRaw <= 0n) {
+            effectiveLpMusdRaw = lpMusdRaw;
+          }
+          console.log(
+            `using partial ${symbol} LP size token=${ethers.formatUnits(effectiveLpTokenRaw, decimals)} musd=${ethers.formatEther(
+              effectiveLpMusdRaw
+            )}`
+          );
+          canProvideToken = true;
+        } else {
+          canProvideToken = await ensureTokenBalance(tokenAddress, deployer.address, effectiveLpTokenRaw, symbol, decimals);
+        }
+      }
+      if (!canProvideToken || effectiveLpTokenRaw <= 0n) {
         console.log(`skip LP for ${symbol}: token balance is insufficient`);
         continue;
       }
 
-      const canTopUpMusd = await ensureMusdBalance(lpMusdRaw);
+      const canTopUpMusd = await ensureMusdBalance(effectiveLpMusdRaw);
       const musdBalance = await musd.balanceOf(deployer.address);
-      if (!canTopUpMusd || musdBalance < lpMusdRaw) {
+      if (!canTopUpMusd || musdBalance < effectiveLpMusdRaw) {
         console.log(
-          `skip LP for ${symbol}: mUSD balance insufficient required=${ethers.formatEther(lpMusdRaw)} available=${ethers.formatEther(
+          `skip LP for ${symbol}: mUSD balance insufficient required=${ethers.formatEther(effectiveLpMusdRaw)} available=${ethers.formatEther(
             musdBalance
           )}`
         );
         continue;
       }
 
-      await (await token.approve(await router.getAddress(), lpTokenRaw)).wait();
-      await (await musd.approve(await router.getAddress(), lpMusdRaw)).wait();
+      await (await token.approve(await router.getAddress(), effectiveLpTokenRaw)).wait();
+      await (await musd.approve(await router.getAddress(), effectiveLpMusdRaw)).wait();
 
-      const minToken = (lpTokenRaw * 99n) / 100n;
-      const minMusd = (lpMusdRaw * 99n) / 100n;
+      const minToken = applyMinBps(effectiveLpTokenRaw, minLiquidityBps);
+      const minMusd = applyMinBps(effectiveLpMusdRaw, minLiquidityBps);
 
-      await (
-        await router.addLiquidity(
-          await musd.getAddress(),
-          tokenAddress,
-          lpMusdRaw,
-          lpTokenRaw,
-          minMusd,
-          minToken,
-          deployer.address,
-          deadline
-        )
-      ).wait();
+      const majorLpAdded = await addLiquidityWithFallback({
+        symbol,
+        tokenAddress,
+        desiredMusd: effectiveLpMusdRaw,
+        desiredToken: effectiveLpTokenRaw,
+        minMusd,
+        minToken
+      });
+      if (!majorLpAdded) {
+        continue;
+      }
 
       const pair = await factory.getPair(await musd.getAddress(), tokenAddress);
-      createdPools.push({ symbol, token: tokenAddress, pair });
+      createdPools.push({ symbol, token: tokenAddress, pair, decimals });
       handledTokenAddresses.add(tokenAddress.toLowerCase());
       if (!existingTokenBySymbol.has(symbol)) {
         existingTokenBySymbol.set(symbol, tokenAddress.toLowerCase());
@@ -780,24 +1067,23 @@ async function main(): Promise<void> {
         await (await token.approve(await router.getAddress(), lpTokenRaw)).wait();
         await (await musd.approve(await router.getAddress(), lpMusdRaw)).wait();
 
-        const minToken = (lpTokenRaw * 99n) / 100n;
-        const minMusd = (lpMusdRaw * 99n) / 100n;
+        const minToken = applyMinBps(lpTokenRaw, minLiquidityBps);
+        const minMusd = applyMinBps(lpMusdRaw, minLiquidityBps);
 
-        await (
-          await router.addLiquidity(
-            await musd.getAddress(),
-            tokenAddress,
-            lpMusdRaw,
-            lpTokenRaw,
-            minMusd,
-            minToken,
-            deployer.address,
-            deadline
-          )
-        ).wait();
+        const registryLpAdded = await addLiquidityWithFallback({
+          symbol,
+          tokenAddress,
+          desiredMusd: lpMusdRaw,
+          desiredToken: lpTokenRaw,
+          minMusd,
+          minToken
+        });
+        if (!registryLpAdded) {
+          continue;
+        }
 
         const pair = await factory.getPair(await musd.getAddress(), tokenAddress);
-        createdPools.push({ symbol, token: tokenAddress, pair });
+        createdPools.push({ symbol, token: tokenAddress, pair, decimals });
         handledTokenAddresses.add(tokenAddress);
         existingTokenBySymbol.set(symbol, tokenAddress);
         console.log(`added LP (registry-mode): ${symbol} pair=${pair}`);

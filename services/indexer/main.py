@@ -78,6 +78,7 @@ class Settings:
     enable_simulation: bool
     simulation_interval_seconds: int
     registry_refresh_seconds: int
+    rpc_max_addresses_per_filter: int
     pair_addresses_overridden: bool
     stabilizer_addresses_overridden: bool
     vault_addresses_overridden: bool
@@ -237,6 +238,7 @@ def _settings_from_env() -> Settings:
         enable_simulation=os.getenv('INDEXER_ENABLE_SIMULATION', 'false').lower() == 'true',
         simulation_interval_seconds=int(os.getenv('INDEXER_SIMULATION_INTERVAL_SECONDS', '20')),
         registry_refresh_seconds=int(os.getenv('INDEXER_REGISTRY_REFRESH_SECONDS', '30')),
+        rpc_max_addresses_per_filter=max(1, int(os.getenv('INDEXER_RPC_MAX_ADDRESSES_PER_FILTER', '8'))),
         pair_addresses_overridden=pair_addresses_overridden,
         stabilizer_addresses_overridden=stabilizer_addresses_overridden,
         vault_addresses_overridden=vault_addresses_overridden
@@ -432,13 +434,11 @@ class ChainIndexer:
     def _poll_pair_events(self, from_block: int, to_block: int) -> None:
         assert self.web3 is not None
 
-        logs = self.web3.eth.get_logs(
-            {
-                'fromBlock': from_block,
-                'toBlock': to_block,
-                'address': [Web3.to_checksum_address(x) for x in self.settings.pair_addresses],
-                'topics': [[self.swap_topic, self.mint_topic, self.burn_topic, self.protocol_fee_accrued_topic]]
-            }
+        logs = self._get_logs_batched_by_address(
+            addresses=self.settings.pair_addresses,
+            from_block=from_block,
+            to_block=to_block,
+            topics=[[self.swap_topic, self.mint_topic, self.burn_topic, self.protocol_fee_accrued_topic]]
         )
 
         for log in logs:
@@ -455,13 +455,11 @@ class ChainIndexer:
     def _poll_stabilizer_events(self, from_block: int, to_block: int) -> None:
         assert self.web3 is not None
 
-        logs = self.web3.eth.get_logs(
-            {
-                'fromBlock': from_block,
-                'toBlock': to_block,
-                'address': [Web3.to_checksum_address(x) for x in self.settings.stabilizer_addresses],
-                'topics': [[self.note_minted_topic, self.note_burned_topic]]
-            }
+        logs = self._get_logs_batched_by_address(
+            addresses=self.settings.stabilizer_addresses,
+            from_block=from_block,
+            to_block=to_block,
+            topics=[[self.note_minted_topic, self.note_burned_topic]]
         )
 
         for log in logs:
@@ -474,13 +472,11 @@ class ChainIndexer:
     def _poll_vault_events(self, from_block: int, to_block: int) -> None:
         assert self.web3 is not None
 
-        logs = self.web3.eth.get_logs(
-            {
-                'fromBlock': from_block,
-                'toBlock': to_block,
-                'address': [Web3.to_checksum_address(x) for x in self.settings.vault_addresses],
-                'topics': [[self.fee_received_topic, self.converted_topic, self.distribution_executed_topic]]
-            }
+        logs = self._get_logs_batched_by_address(
+            addresses=self.settings.vault_addresses,
+            from_block=from_block,
+            to_block=to_block,
+            topics=[[self.fee_received_topic, self.converted_topic, self.distribution_executed_topic]]
         )
 
         for log in logs:
@@ -491,6 +487,46 @@ class ChainIndexer:
                 self._handle_treasury_converted_log(log)
             elif topic0 == self.distribution_executed_topic:
                 self._handle_distribution_log(log)
+
+    def _get_logs_batched_by_address(
+        self,
+        *,
+        addresses: list[str],
+        from_block: int,
+        to_block: int,
+        topics: list[list[str]]
+    ) -> list[dict[str, Any]]:
+        assert self.web3 is not None
+
+        checksummed = [Web3.to_checksum_address(addr) for addr in addresses]
+        if not checksummed:
+            return []
+
+        chunk_size = max(1, self.settings.rpc_max_addresses_per_filter)
+        batched_logs: list[dict[str, Any]] = []
+
+        for start in range(0, len(checksummed), chunk_size):
+            chunk = checksummed[start:start + chunk_size]
+            logs = self.web3.eth.get_logs(
+                {
+                    'fromBlock': from_block,
+                    'toBlock': to_block,
+                    'address': chunk,
+                    'topics': topics
+                }
+            )
+            batched_logs.extend(logs)
+
+        if len(batched_logs) > 1:
+            batched_logs.sort(
+                key=lambda item: (
+                    int(item.get('blockNumber') or 0),
+                    int(item.get('transactionIndex') or 0),
+                    int(item.get('logIndex') or 0)
+                )
+            )
+
+        return batched_logs
 
     def _maybe_emit_simulated_note(self) -> None:
         if not self.settings.enable_simulation:

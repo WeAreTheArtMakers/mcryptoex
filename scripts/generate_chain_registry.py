@@ -15,6 +15,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_DIR = REPO_ROOT / 'packages' / 'contracts' / 'deploy'
 OUT_PATH = REPO_ROOT / 'packages' / 'sdk' / 'data' / 'chain-registry.generated.json'
+ENV_CANDIDATES = [REPO_ROOT / '.env', REPO_ROOT / 'packages' / 'contracts' / '.env']
 
 SELECTOR_ALL_PAIRS_LENGTH = '0x574f2ba3'
 SELECTOR_ALL_PAIRS = '0x1e3dd18b'
@@ -54,6 +55,74 @@ CHAIN_SPECS = [
         'confirmation_depth': 3
     }
 ]
+
+CANONICAL_WRAPPED_BY_CHAIN: dict[str, list[dict[str, Any]]] = {
+    'ethereum-sepolia': [
+        {
+            'symbol': 'WETH',
+            'name': 'Wrapped Ether',
+            'address': '0xfff9976782d46cc05630d1f6ebab18b2324d6b14',
+            'decimals': 18
+        }
+    ],
+    'bnb-testnet': [
+        {
+            'symbol': 'WBNB',
+            'name': 'Wrapped BNB',
+            'address': '0xae13d989dac2f0debff460ac112a837c89baa7cd',
+            'decimals': 18
+        }
+    ]
+}
+
+STATIC_CHAIN_TOKENS: dict[str, list[dict[str, Any]]] = {
+    'bnb-testnet': [
+        {
+            'symbol': 'MODX',
+            'name': 'modX Token',
+            'address': '0xB6322eD8561604Ca2A1b9c17e4d02B957EB242fe',
+            'decimals': 18
+        }
+    ]
+}
+
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        if not key:
+            continue
+        cleaned = value.strip().strip("'").strip('"')
+        if not cleaned:
+            continue
+
+        current = os.environ.get(key, '').strip()
+        if current:
+            key_upper = key.upper()
+            if key_upper in {'SEPOLIA_RPC_URL', 'BSC_TESTNET_RPC_URL', 'INDEXER_HARDHAT_RPC_URL'}:
+                if 'publicnode.com' not in current.lower():
+                    continue
+            else:
+                continue
+
+        os.environ[key] = cleaned
+
+
+def _load_known_env_files() -> None:
+    for path in ENV_CANDIDATES:
+        _load_env_file(path)
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -116,7 +185,33 @@ def _read_pair_seed(network: str) -> dict[str, Any]:
         payload = json.loads(seed_path.read_text(encoding='utf-8'))
     except json.JSONDecodeError:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+
+    raw_tokens = payload.get('tokens') if isinstance(payload.get('tokens'), list) else []
+    raw_pairs = payload.get('pairs') if isinstance(payload.get('pairs'), list) else []
+
+    tokens: list[dict] = []
+    for token in raw_tokens:
+        if not isinstance(token, dict):
+            continue
+        address = str(token.get('address', '')).strip()
+        if not _is_evm_address(address):
+            continue
+        tokens.append(token)
+
+    pairs: list[dict] = []
+    for pair in raw_pairs:
+        if not isinstance(pair, dict):
+            continue
+        pair_address = str(pair.get('pair_address', '')).strip()
+        token0_address = str(pair.get('token0_address', '')).strip()
+        token1_address = str(pair.get('token1_address', '')).strip()
+        if not (_is_evm_address(pair_address) and _is_evm_address(token0_address) and _is_evm_address(token1_address)):
+            continue
+        pairs.append(pair)
+
+    return {'tokens': tokens, 'pairs': pairs}
 
 
 def _token_entry(symbol: str, name: str, decimals: int, address: str, source: str) -> dict:
@@ -209,6 +304,52 @@ def _append_registry_targets(tokens: list[dict], deployed_entry: dict) -> list[d
     return tokens
 
 
+def _target_pairs_from_registry(deployed_entry: dict, checked_at: str) -> list[dict]:
+    configured = deployed_entry.get('targets', [])
+    if not isinstance(configured, list):
+        return []
+
+    contracts = deployed_entry.get('contracts', {})
+    if not isinstance(contracts, dict):
+        return []
+
+    musd = str(contracts.get('musd', '')).strip()
+    if not _is_evm_address(musd):
+        return []
+
+    output: list[dict] = []
+    seen: set[str] = set()
+    for item in configured:
+        if not isinstance(item, dict):
+            continue
+
+        pair_address = str(item.get('pair', '')).strip()
+        token_address = str(item.get('token', '')).strip()
+        if not (_is_evm_address(pair_address) and _is_evm_address(token_address)):
+            continue
+
+        key = pair_address.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        symbol = str(item.get('symbol', '')).strip() or f'TKN{token_address[-4:]}'
+        output.append(
+            {
+                'pair_address': pair_address,
+                'token0_address': musd,
+                'token1_address': token_address,
+                'token0_symbol': 'mUSD',
+                'token1_symbol': symbol,
+                'reserve0_decimal': '0',
+                'reserve1_decimal': '0',
+                'checked_at': checked_at
+            }
+        )
+
+    return output
+
+
 def _merge_tokens_with_previous(current_tokens: list[dict], previous_tokens: list[dict]) -> list[dict]:
     merged: dict[str, dict] = {}
 
@@ -216,12 +357,9 @@ def _merge_tokens_with_previous(current_tokens: list[dict], previous_tokens: lis
         if not isinstance(token, dict):
             return
         address = str(token.get('address', '')).strip()
-        symbol = str(token.get('symbol', '')).strip()
-        if _is_evm_address(address):
-            merged[address.lower()] = token
+        if not _is_evm_address(address):
             return
-        if symbol:
-            merged[f'symbol:{symbol.upper()}'] = token
+        merged[address.lower()] = token
 
     for token in current_tokens:
         put_token(token)
@@ -242,26 +380,64 @@ def _resolve_tokens(spec: dict, contracts: dict, deployed_entry: dict) -> list[d
             _token_entry('USDC', 'USD Coin (local collateral)', 6, collateral, 'contracts.collateral'),
             _token_entry('WETH', 'Wrapped Ether', 18, token_a, 'contracts.tokenA'),
             _token_entry('WBTC', 'Wrapped Bitcoin', 8, token_b, 'contracts.tokenB'),
-            _token_entry('WSOL', 'Wrapped SOL (EVM)', 18, 'local-wsol', 'defaults')
         ]
         return _append_registry_targets(_append_registry_collaterals(tokens, deployed_entry), deployed_entry)
 
-    if spec['chain_key'] == 'ethereum-sepolia':
-        tokens = [
-            _token_entry('mUSD', 'Musical USD', 18, musd, 'contracts.musd'),
-            _token_entry('WETH', 'Wrapped Ether', 18, 'bridge-weth-sepolia', 'defaults'),
-            _token_entry('wBTC', 'Wrapped Bitcoin (bridge)', 8, 'bridge-wbtc-sepolia', 'defaults'),
-            _token_entry('wSOL', 'Wrapped SOL (bridge)', 18, 'bridge-wsol-sepolia', 'defaults')
-        ]
-        return _append_registry_targets(_append_registry_collaterals(tokens, deployed_entry), deployed_entry)
+    tokens = [_token_entry('mUSD', 'Musical USD', 18, musd, 'contracts.musd')]
+    for wrapped in CANONICAL_WRAPPED_BY_CHAIN.get(spec['chain_key'], []):
+        address = str(wrapped.get('address', '')).strip()
+        if not _is_evm_address(address):
+            continue
+        tokens.append(
+            _token_entry(
+                str(wrapped.get('symbol', '')).strip() or 'WRAPPED',
+                str(wrapped.get('name', '')).strip() or 'Wrapped Asset',
+                int(wrapped.get('decimals', 18)),
+                address,
+                'defaults'
+            )
+        )
+    for token in STATIC_CHAIN_TOKENS.get(spec['chain_key'], []):
+        address = str(token.get('address', '')).strip()
+        if not _is_evm_address(address):
+            continue
+        tokens.append(
+            _token_entry(
+                str(token.get('symbol', '')).strip() or 'TOKEN',
+                str(token.get('name', '')).strip() or 'Token',
+                int(token.get('decimals', 18)),
+                address,
+                'static'
+            )
+        )
 
-    tokens = [
-        _token_entry('mUSD', 'Musical USD', 18, musd, 'contracts.musd'),
-        _token_entry('WBNB', 'Wrapped BNB', 18, 'bridge-wbnb-bsc', 'defaults'),
-        _token_entry('wBTC', 'Wrapped Bitcoin (bridge)', 18, 'bridge-wbtc-bsc', 'defaults'),
-        _token_entry('wSOL', 'Wrapped SOL (bridge)', 18, 'bridge-wsol-bsc', 'defaults')
-    ]
     return _append_registry_targets(_append_registry_collaterals(tokens, deployed_entry), deployed_entry)
+
+
+def _filter_evm_pairs(pairs: list[dict]) -> list[dict]:
+    output: list[dict] = []
+    for pair in pairs:
+        if not isinstance(pair, dict):
+            continue
+        pair_address = str(pair.get('pair_address', '')).strip()
+        token0_address = str(pair.get('token0_address', '')).strip()
+        token1_address = str(pair.get('token1_address', '')).strip()
+        if not (_is_evm_address(pair_address) and _is_evm_address(token0_address) and _is_evm_address(token1_address)):
+            continue
+        output.append(pair)
+    return output
+
+
+def _merge_pair_lists(primary_pairs: list[dict], secondary_pairs: list[dict]) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for pair in primary_pairs + secondary_pairs:
+        if not isinstance(pair, dict):
+            continue
+        pair_address = str(pair.get('pair_address', '')).strip().lower()
+        if not pair_address:
+            continue
+        merged[pair_address] = pair
+    return list(merged.values())
 
 
 def _trust_assumptions(chain_key: str, checked_at: str) -> list[dict]:
@@ -557,6 +733,7 @@ def build_registry() -> dict:
         previous_chain = previous_generated.get(spec['chain_key'], {})
         pair_seed = _read_pair_seed(spec['network'])
         deployed_entry = deployed.get(spec['network'], {})
+        target_pairs = _target_pairs_from_registry(deployed_entry, generated_at)
         contracts = deployed_entry.get('contracts', {})
         if not isinstance(contracts, dict):
             contracts = {}
@@ -618,43 +795,47 @@ def build_registry() -> dict:
                     chain_entry=chain_entry,
                     checked_at=generated_at
                 )
-                chain_entry['pairs'] = pairs
-                chain_entry['indexer']['pair_addresses'] = pair_addresses
+                filtered_pairs = _filter_evm_pairs(pairs)
+                chain_entry['pairs'] = filtered_pairs
+                chain_entry['indexer']['pair_addresses'] = [
+                    str(pair.get('pair_address', '')).strip()
+                    for pair in filtered_pairs
+                    if isinstance(pair, dict)
+                ]
                 chain_entry['network_health'] = health
             except (urllib.error.URLError, TimeoutError, RuntimeError, ValueError) as exc:
-                fallback_pairs = previous_chain.get('pairs') if isinstance(previous_chain.get('pairs'), list) else []
-                fallback_pair_addresses = []
-                fallback_source = 'previous'
-                if isinstance(previous_chain.get('indexer'), dict):
-                    raw_pair_addresses = previous_chain['indexer'].get('pair_addresses')
-                    if isinstance(raw_pair_addresses, list):
-                        fallback_pair_addresses = [
-                            str(item).strip()
-                            for item in raw_pair_addresses
-                            if _is_evm_address(str(item).strip())
-                        ]
-                if not fallback_pairs:
-                    fallback_pairs = pair_seed.get('pairs') if isinstance(pair_seed.get('pairs'), list) else []
-                    seed_tokens = pair_seed.get('tokens') if isinstance(pair_seed.get('tokens'), list) else []
-                    if fallback_pairs:
-                        fallback_source = 'seed'
-                        fallback_pair_addresses = [
-                            str(pair.get('pair_address', '')).strip()
-                            for pair in fallback_pairs
-                            if isinstance(pair, dict) and _is_evm_address(str(pair.get('pair_address', '')).strip())
-                        ]
-                        chain_entry['tokens'] = _merge_tokens_with_previous(chain_entry['tokens'], seed_tokens)
+                previous_pairs = previous_chain.get('pairs') if isinstance(previous_chain.get('pairs'), list) else []
+                seed_pairs = pair_seed.get('pairs') if isinstance(pair_seed.get('pairs'), list) else []
+                fallback_pairs = _merge_pair_lists(previous_pairs, seed_pairs)
+                fallback_pairs = _merge_pair_lists(target_pairs, fallback_pairs)
+                source_parts: list[str] = []
+                if previous_pairs:
+                    source_parts.append('previous')
+                if seed_pairs:
+                    source_parts.append('seed')
+                if target_pairs:
+                    source_parts.append('targets')
+                fallback_source = '+'.join(source_parts) if source_parts else 'none'
+
+                seed_tokens = pair_seed.get('tokens') if isinstance(pair_seed.get('tokens'), list) else []
+                if seed_tokens:
+                    chain_entry['tokens'] = _merge_tokens_with_previous(chain_entry['tokens'], seed_tokens)
                 if fallback_pairs:
                     previous_tokens = previous_chain.get('tokens') if isinstance(previous_chain.get('tokens'), list) else []
                     chain_entry['tokens'] = _merge_tokens_with_previous(chain_entry['tokens'], previous_tokens)
-                    chain_entry['pairs'] = fallback_pairs
-                    chain_entry['indexer']['pair_addresses'] = fallback_pair_addresses
+                    filtered_fallback_pairs = _filter_evm_pairs(fallback_pairs)
+                    chain_entry['pairs'] = filtered_fallback_pairs
+                    chain_entry['indexer']['pair_addresses'] = [
+                        str(pair.get('pair_address', '')).strip()
+                        for pair in filtered_fallback_pairs
+                        if isinstance(pair, dict)
+                    ]
                     chain_entry['network_health'] = {
                         'rpc_connected': False,
                         'latest_block': None,
                         'checked_at': generated_at,
                         'discovery_status': f'fallback-{fallback_source}: {exc}',
-                        'fallback_pair_count': len(fallback_pairs)
+                        'fallback_pair_count': len(filtered_fallback_pairs)
                     }
                 else:
                     chain_entry['network_health'] = {
@@ -664,39 +845,38 @@ def build_registry() -> dict:
                         'discovery_status': f'error: {exc}'
                     }
         else:
-            fallback_pairs = previous_chain.get('pairs') if isinstance(previous_chain.get('pairs'), list) else []
-            fallback_pair_addresses = []
-            fallback_source = 'previous'
-            if isinstance(previous_chain.get('indexer'), dict):
-                raw_pair_addresses = previous_chain['indexer'].get('pair_addresses')
-                if isinstance(raw_pair_addresses, list):
-                    fallback_pair_addresses = [
-                        str(item).strip()
-                        for item in raw_pair_addresses
-                        if _is_evm_address(str(item).strip())
-                    ]
-            if not fallback_pairs:
-                fallback_pairs = pair_seed.get('pairs') if isinstance(pair_seed.get('pairs'), list) else []
-                seed_tokens = pair_seed.get('tokens') if isinstance(pair_seed.get('tokens'), list) else []
-                if fallback_pairs:
-                    fallback_source = 'seed'
-                    fallback_pair_addresses = [
-                        str(pair.get('pair_address', '')).strip()
-                        for pair in fallback_pairs
-                        if isinstance(pair, dict) and _is_evm_address(str(pair.get('pair_address', '')).strip())
-                    ]
-                    chain_entry['tokens'] = _merge_tokens_with_previous(chain_entry['tokens'], seed_tokens)
+            previous_pairs = previous_chain.get('pairs') if isinstance(previous_chain.get('pairs'), list) else []
+            seed_pairs = pair_seed.get('pairs') if isinstance(pair_seed.get('pairs'), list) else []
+            fallback_pairs = _merge_pair_lists(previous_pairs, seed_pairs)
+            fallback_pairs = _merge_pair_lists(target_pairs, fallback_pairs)
+            source_parts: list[str] = []
+            if previous_pairs:
+                source_parts.append('previous')
+            if seed_pairs:
+                source_parts.append('seed')
+            if target_pairs:
+                source_parts.append('targets')
+            fallback_source = '+'.join(source_parts) if source_parts else 'none'
+
+            seed_tokens = pair_seed.get('tokens') if isinstance(pair_seed.get('tokens'), list) else []
+            if seed_tokens:
+                chain_entry['tokens'] = _merge_tokens_with_previous(chain_entry['tokens'], seed_tokens)
             if fallback_pairs:
                 previous_tokens = previous_chain.get('tokens') if isinstance(previous_chain.get('tokens'), list) else []
                 chain_entry['tokens'] = _merge_tokens_with_previous(chain_entry['tokens'], previous_tokens)
-                chain_entry['pairs'] = fallback_pairs
-                chain_entry['indexer']['pair_addresses'] = fallback_pair_addresses
+                filtered_fallback_pairs = _filter_evm_pairs(fallback_pairs)
+                chain_entry['pairs'] = filtered_fallback_pairs
+                chain_entry['indexer']['pair_addresses'] = [
+                    str(pair.get('pair_address', '')).strip()
+                    for pair in filtered_fallback_pairs
+                    if isinstance(pair, dict)
+                ]
                 chain_entry['network_health'] = {
                     'rpc_connected': False,
                     'latest_block': None,
                     'checked_at': generated_at,
                     'discovery_status': f'fallback-{fallback_source}: rpc-url-missing',
-                    'fallback_pair_count': len(fallback_pairs)
+                    'fallback_pair_count': len(filtered_fallback_pairs)
                 }
             else:
                 chain_entry['network_health'] = {
@@ -717,6 +897,7 @@ def build_registry() -> dict:
 
 
 def main() -> None:
+    _load_known_env_files()
     registry = build_registry()
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text(json.dumps(registry, indent=2) + '\n', encoding='utf-8')

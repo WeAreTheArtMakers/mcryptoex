@@ -295,6 +295,35 @@ services:
     ports:
       - '${WEB_PORT}:3000'
 
+  market-bot-bnb:
+    image: node:20-bookworm
+    restart: unless-stopped
+    profiles: ['bot']
+    depends_on:
+      - api
+      - indexer-bnb
+    working_dir: /workspace
+    env_file:
+      - ./.local-secrets/bot-modx-seed-bsctestnet-bscTestnet.env
+    environment:
+      BOT_NETWORK: bscTestnet
+      BOT_SYMBOLS: ${BOT_SYMBOLS:-WBNB,USDC,USDT,MODX}
+      BOT_INTERVAL_SEC: ${BOT_INTERVAL_SEC:-45}
+      BOT_ROUNDS: ${BOT_ROUNDS:-1}
+      BOT_SLIPPAGE_BPS: ${BOT_SLIPPAGE_BPS:-90}
+      BOT_REVERSE_MUSD_AMOUNT: ${BOT_REVERSE_MUSD_AMOUNT:-12}
+      BOT_STRICT: ${BOT_STRICT:-false}
+      BOT_GAS_GUARD_MIN_NATIVE: ${BOT_GAS_GUARD_MIN_NATIVE:-0.05}
+      BOT_GAS_GUARD_MODE: ${BOT_GAS_GUARD_MODE:-stop}
+      OHLC_SEED_AMOUNT_MODX: ${OHLC_SEED_AMOUNT_MODX:-1}
+      OHLC_SEED_ACQUIRE_BUFFER_BPS: ${OHLC_SEED_ACQUIRE_BUFFER_BPS:-1200}
+      BSC_TESTNET_RPC_URL: ${BSC_TESTNET_RPC_URL:-}
+      SEPOLIA_RPC_URL: ${SEPOLIA_RPC_URL:-}
+    volumes:
+      - ./:/workspace
+    command: >
+      /bin/bash -lc "bash /workspace/scripts/run-market-bot.sh"
+
   prometheus:
     image: prom/prometheus:v3.3.1
     command:

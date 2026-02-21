@@ -56,6 +56,13 @@ function parseCsv(value: string | undefined): string[] {
     .filter((x) => x.length > 0);
 }
 
+function boolEnv(name: string, fallback = false): boolean {
+  const raw = envForChain(name);
+  if (!raw || !raw.trim()) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
 function envForChain(name: string): string | undefined {
   const suffix = network.name.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
   return process.env[`${name}_${suffix}`] || process.env[name];
@@ -98,6 +105,7 @@ function dedupeCollaterals(inputs: CollateralInput[]): CollateralInput[] {
 }
 
 function resolveCollaterals(config: DeployConfig): CollateralInput[] {
+  const collateralOverride = boolEnv('COLLATERAL_OVERRIDE', false);
   const envSingleCollateral = sanitizeAddress(envForChain('COLLATERAL_TOKEN'));
   const envCollateralList = parseCsv(envForChain('COLLATERAL_TOKENS')).map((token) => ({
     token
@@ -107,26 +115,28 @@ function resolveCollaterals(config: DeployConfig): CollateralInput[] {
     process.env.STABLE_COLLATERAL_MAX_DEVIATION_BPS || DEFAULT_STABLE_DEVIATION_BPS.toString()
   );
   const stableBounds = stableBoundsE18(stableDeviationBps);
-  const stableEnvTokens = [
-    {
-      token: sanitizeAddress(envForChain('USDC_TOKEN_ADDRESS')),
-      symbol: 'USDC'
-    },
-    {
-      token: sanitizeAddress(envForChain('USDT_TOKEN_ADDRESS')),
-      symbol: 'USDT'
-    }
-  ]
-    .filter((x) => x.token.length > 0)
-    .map((x) => ({
-      token: x.token,
-      symbol: x.symbol,
-      minOraclePriceE18: stableBounds.min,
-      maxOraclePriceE18: stableBounds.max
-    }));
+  const stableEnvTokens = collateralOverride
+    ? []
+    : [
+        {
+          token: sanitizeAddress(envForChain('USDC_TOKEN_ADDRESS')),
+          symbol: 'USDC'
+        },
+        {
+          token: sanitizeAddress(envForChain('USDT_TOKEN_ADDRESS')),
+          symbol: 'USDT'
+        }
+      ]
+        .filter((x) => x.token.length > 0)
+        .map((x) => ({
+          token: x.token,
+          symbol: x.symbol,
+          minOraclePriceE18: stableBounds.min,
+          maxOraclePriceE18: stableBounds.max
+        }));
 
   const inputs: CollateralInput[] = [];
-  if (Array.isArray(config.collaterals)) {
+  if (!collateralOverride && Array.isArray(config.collaterals)) {
     inputs.push(...config.collaterals);
   }
   if (envSingleCollateral) {
@@ -144,6 +154,7 @@ function resolveCollaterals(config: DeployConfig): CollateralInput[] {
   }
 
   if (
+    !collateralOverride &&
     inputs.length === 0 &&
     config.collateralToken &&
     sanitizeAddress(config.collateralToken)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -59,6 +60,109 @@ def _analytics_empty(minutes: int, warning: str | None = None) -> dict:
     if warning:
         payload['warning'] = warning
     return payload
+
+
+def _normalize_pool_address(value: str) -> str:
+    return str(value or '').strip().lower()
+
+
+def _is_evm_pool_address(value: str) -> bool:
+    return bool(re.fullmatch(r'0x[a-f0-9]{40}', _normalize_pool_address(value)))
+
+
+def _pair_symbol_key(token0_symbol: str, token1_symbol: str) -> tuple[str, str]:
+    token0 = str(token0_symbol or '').strip().upper()
+    token1 = str(token1_symbol or '').strip().upper()
+    if token0 <= token1:
+        return token0, token1
+    return token1, token0
+
+
+def _parse_canonical_pool_allowlist() -> tuple[set[str], set[tuple[int, str]]]:
+    raw = str(os.getenv('CANONICAL_POOL_ALLOWLIST', '')).strip()
+    global_allowlist: set[str] = set()
+    chain_allowlist: set[tuple[int, str]] = set()
+    if not raw:
+        return global_allowlist, chain_allowlist
+
+    for chunk in re.split(r'[,;\s]+', raw):
+        item = chunk.strip()
+        if not item:
+            continue
+        if ':' in item:
+            chain_raw, addr_raw = item.split(':', 1)
+            addr = _normalize_pool_address(addr_raw)
+            if not _is_evm_pool_address(addr):
+                continue
+            try:
+                chain_value = int(chain_raw.strip())
+            except (TypeError, ValueError):
+                continue
+            if chain_value <= 0:
+                continue
+            chain_allowlist.add((chain_value, addr))
+            continue
+
+        addr = _normalize_pool_address(item)
+        if _is_evm_pool_address(addr):
+            global_allowlist.add(addr)
+
+    return global_allowlist, chain_allowlist
+
+
+def _pair_liquidity_score(pair: dict) -> Decimal:
+    try:
+        reserve0 = Decimal(str(pair.get('reserve0_decimal', '0')))
+        reserve1 = Decimal(str(pair.get('reserve1_decimal', '0')))
+    except Exception:
+        reserve0 = Decimal('0')
+        reserve1 = Decimal('0')
+    if reserve0 <= 0 or reserve1 <= 0:
+        return Decimal('0')
+    return reserve0 * reserve1
+
+
+def _select_canonical_registry_pairs(
+    registry_pairs: dict[tuple[int, str], dict]
+) -> set[tuple[int, str]]:
+    canonical_keys: set[tuple[int, str]] = set()
+    global_allowlist, chain_allowlist = _parse_canonical_pool_allowlist()
+
+    grouped: dict[tuple[int, tuple[str, str]], list[tuple[tuple[int, str], dict]]] = {}
+    for key, pair in registry_pairs.items():
+        symbol_key = _pair_symbol_key(
+            str(pair.get('token0_symbol', '')),
+            str(pair.get('token1_symbol', ''))
+        )
+        if not symbol_key[0] or not symbol_key[1]:
+            continue
+        group_key = (int(pair.get('chain_id', 0)), symbol_key)
+        grouped.setdefault(group_key, []).append((key, pair))
+
+    for group in grouped.values():
+        if not group:
+            continue
+
+        allowlisted_group = [
+            (key, pair)
+            for key, pair in group
+            if (
+                (key[1] in global_allowlist) or
+                ((int(pair.get('chain_id', 0)), key[1]) in chain_allowlist)
+            )
+        ]
+        candidates = allowlisted_group if allowlisted_group else group
+        candidates.sort(
+            key=lambda item: (
+                _pair_liquidity_score(item[1]),
+                str(item[1].get('checked_at') or ''),
+                str(item[1].get('pool_address') or '')
+            ),
+            reverse=True
+        )
+        canonical_keys.add(candidates[0][0])
+
+    return canonical_keys
 
 
 def _connect_clickhouse():
@@ -175,7 +279,8 @@ async def quote(
 async def pairs(
     chain_id: int | None = Query(default=None, gt=0),
     limit: int = Query(default=100, ge=1, le=1000),
-    dedupe_symbols: bool = Query(default=True)
+    dedupe_symbols: bool = Query(default=True),
+    include_external: bool = Query(default=False)
 ) -> dict:
     assert _pg_pool is not None
     registry = load_chain_registry()
@@ -197,13 +302,21 @@ async def pairs(
             pool_address = str(pair.get('pair_address', '')).strip().lower()
             if not pool_address:
                 continue
+            token0_symbol = str(pair.get('token0_symbol', '')).strip()
+            token1_symbol = str(pair.get('token1_symbol', '')).strip()
+            token0_address = str(pair.get('token0_address', '')).strip()
+            token1_address = str(pair.get('token1_address', '')).strip()
+            if token0_symbol and token1_symbol and token0_symbol.upper() == token1_symbol.upper():
+                continue
+            if token0_address and token1_address and token0_address.lower() == token1_address.lower():
+                continue
             registry_pairs[(item_chain_id, pool_address)] = {
                 'chain_id': item_chain_id,
                 'pool_address': pool_address,
-                'token0_symbol': str(pair.get('token0_symbol', '')).strip(),
-                'token1_symbol': str(pair.get('token1_symbol', '')).strip(),
-                'token0_address': str(pair.get('token0_address', '')).strip(),
-                'token1_address': str(pair.get('token1_address', '')).strip(),
+                'token0_symbol': token0_symbol,
+                'token1_symbol': token1_symbol,
+                'token0_address': token0_address,
+                'token1_address': token1_address,
                 'reserve0_decimal': str(pair.get('reserve0_decimal', '0')),
                 'reserve1_decimal': str(pair.get('reserve1_decimal', '0')),
                 'checked_at': pair.get('checked_at')
@@ -243,6 +356,8 @@ async def pairs(
             *params
         )
 
+    canonical_registry_keys = _select_canonical_registry_pairs(registry_pairs)
+
     stats_map: dict[tuple[int, str], dict] = {}
     for row in stats_rows:
         key = (int(row['chain_id']), str(row['pool_address']).lower())
@@ -261,6 +376,7 @@ async def pairs(
     merged: list[dict] = []
     for key, pair in registry_pairs.items():
         stat = stats_map.pop(key, None)
+        is_canonical = key in canonical_registry_keys
         merged.append(
             {
                 'chain_id': pair['chain_id'],
@@ -277,17 +393,23 @@ async def pairs(
                 'total_fee_usd': stat['total_fee_usd'] if stat else '0',
                 'last_swap_at': stat['last_swap_at'] if stat else None,
                 'checked_at': pair['checked_at'],
-                'source': 'registry+ledger' if stat else 'registry'
+                'source': 'registry+ledger' if stat else 'registry',
+                'canonical': is_canonical,
+                'external': not is_canonical
             }
         )
 
     for (_, _pool_address), stat in stats_map.items():
+        token_in = str(stat['token_in']).strip()
+        token_out = str(stat['token_out']).strip()
+        if token_in and token_out and token_in.upper() == token_out.upper():
+            continue
         merged.append(
             {
                 'chain_id': stat['chain_id'],
                 'pool_address': stat['pool_address'],
-                'token0_symbol': stat['token_in'],
-                'token1_symbol': stat['token_out'],
+                'token0_symbol': token_in,
+                'token1_symbol': token_out,
                 'token0_address': '',
                 'token1_address': '',
                 'reserve0_decimal': '0',
@@ -298,7 +420,9 @@ async def pairs(
                 'total_fee_usd': stat['total_fee_usd'],
                 'last_swap_at': stat['last_swap_at'],
                 'checked_at': None,
-                'source': 'ledger'
+                'source': 'ledger',
+                'canonical': False,
+                'external': True
             }
         )
 
@@ -311,8 +435,15 @@ async def pairs(
     )
 
     if dedupe_symbols:
-        deduped_rows: list[dict] = []
-        seen_keys: set[str] = set()
+        deduped_by_key: dict[str, dict] = {}
+
+        def row_score(item: dict) -> tuple[int, int, int, int]:
+            is_canonical = int(bool(item.get('canonical')))
+            has_token_addresses = int(bool(str(item.get('token0_address', '')).strip()) and bool(str(item.get('token1_address', '')).strip()))
+            is_registry_backed = int(str(item.get('source', '')).startswith('registry'))
+            swaps = int(item.get('swaps', 0) or 0)
+            return (is_canonical, has_token_addresses, is_registry_backed, swaps)
+
         for row in merged:
             token0 = str(row.get('token0_symbol', '')).strip().upper()
             token1 = str(row.get('token1_symbol', '')).strip().upper()
@@ -321,11 +452,24 @@ async def pairs(
                 key = f"{int(row.get('chain_id', 0))}:{ordered[0]}:{ordered[1]}"
             else:
                 key = f"{int(row.get('chain_id', 0))}:pool:{str(row.get('pool_address', '')).lower()}"
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            deduped_rows.append(row)
-        merged = deduped_rows
+            existing = deduped_by_key.get(key)
+            if existing is None or row_score(row) > row_score(existing):
+                deduped_by_key[key] = row
+        merged = list(deduped_by_key.values())
+
+        merged.sort(
+            key=lambda row: (
+                int(bool(row.get('canonical'))),
+                int(row['swaps']),
+                row.get('last_swap_at') or datetime.fromtimestamp(0, tz=timezone.utc)
+            ),
+            reverse=True
+        )
+
+    if not include_external:
+        canonical_only = [row for row in merged if bool(row.get('canonical'))]
+        if canonical_only:
+            merged = canonical_only
 
     return {'rows': merged[:limit]}
 

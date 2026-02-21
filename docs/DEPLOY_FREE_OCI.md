@@ -103,6 +103,16 @@ Add repository secrets:
 - `OCI_APP_DIR` - optional, default `~/mcryptoex`
 - `OCI_REPO_URL` - optional (use for private repo clone URL with token/deploy key setup)
 
+One-shot helper (sets secrets and can dispatch workflow):
+
+```bash
+cd ~/mcryptoex
+OCI_HOST=<vm-ip-or-dns> \
+OCI_USER=ubuntu \
+OCI_SSH_KEY="$(cat ~/.ssh/id_ed25519)" \
+scripts/deploy/set-gh-oci-secrets.sh WeAreTheArtMakers/mcryptoex true
+```
+
 Workflow is configured as **manual** (`workflow_dispatch`) by default.
 After secrets are set, run it from GitHub Actions UI.
 

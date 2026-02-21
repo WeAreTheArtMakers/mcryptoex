@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 from functools import lru_cache
@@ -7,6 +8,18 @@ from pathlib import Path
 from typing import Any
 
 from .config import get_settings
+
+STATIC_CHAIN_TOKENS: dict[int, list[dict[str, Any]]] = {
+    97: [
+        {
+            'symbol': 'MODX',
+            'name': 'modX Token',
+            'address': '0xB6322eD8561604Ca2A1b9c17e4d02B957EB242fe',
+            'decimals': 18,
+            'source': 'static.bnb-testnet'
+        }
+    ]
+}
 
 
 def _repo_root() -> Path:
@@ -21,7 +34,7 @@ def _resolve_registry_path(path_value: str) -> Path:
 
 
 @lru_cache(maxsize=1)
-def load_chain_registry() -> dict[str, Any]:
+def _load_chain_registry_cached() -> dict[str, Any]:
     settings = get_settings()
     path = _resolve_registry_path(settings.chain_registry_path)
     if not path.exists():
@@ -38,8 +51,28 @@ def load_chain_registry() -> dict[str, Any]:
         return {'version': 0, 'generated_at': None, 'chains': []}
 
 
+def load_chain_registry() -> dict[str, Any]:
+    # Return a defensive copy so downstream code cannot mutate shared cache state.
+    return copy.deepcopy(_load_chain_registry_cached())
+
+
+load_chain_registry.cache_clear = _load_chain_registry_cached.cache_clear  # type: ignore[attr-defined]
+
+
 def _is_evm_address(value: str) -> bool:
     return bool(re.fullmatch(r'0x[a-fA-F0-9]{40}', value))
+
+
+def _normalize_token(token: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(token)
+    normalized['symbol'] = str(normalized.get('symbol', '')).strip()
+    normalized['address'] = str(normalized.get('address', '')).strip()
+    try:
+        decimals = int(normalized.get('decimals', 18))
+    except (TypeError, ValueError):
+        decimals = 18
+    normalized['decimals'] = max(0, min(36, decimals))
+    return normalized
 
 
 def _token_priority(token: dict[str, Any]) -> tuple[int, int]:
@@ -72,16 +105,17 @@ def _dedupe_tokens(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not symbol:
             continue
         key = symbol.upper()
+        candidate = dict(token)
         current = selected.get(key)
         if current is None:
-            selected[key] = token
+            selected[key] = candidate
             continue
 
-        if _token_priority(token) > _token_priority(current):
-            selected[key] = token
+        if _token_priority(candidate) > _token_priority(current):
+            selected[key] = candidate
 
     # Keep deterministic ordering for stable UI rendering.
-    return [selected[key] for key in sorted(selected.keys())]
+    return [dict(selected[key]) for key in sorted(selected.keys())]
 
 
 def tokens_payload() -> dict[str, Any]:
@@ -98,8 +132,16 @@ def tokens_payload() -> dict[str, Any]:
 
         chain_id_key = str(chain_id)
         raw_tokens = chain.get('tokens') if isinstance(chain.get('tokens'), list) else []
-        tokens = _dedupe_tokens([t for t in raw_tokens if isinstance(t, dict)])
-        tokens_by_chain[chain_id_key] = tokens
+        merged_tokens = [_normalize_token(t) for t in raw_tokens if isinstance(t, dict)]
+        static_tokens = STATIC_CHAIN_TOKENS.get(chain_id, [])
+        merged_tokens.extend([_normalize_token(t) for t in static_tokens if isinstance(t, dict)])
+        tokens = _dedupe_tokens(merged_tokens)
+        executable_tokens = [
+            token
+            for token in tokens
+            if _is_evm_address(str(token.get('address', '')).strip())
+        ]
+        tokens_by_chain[chain_id_key] = executable_tokens
 
         contracts = chain.get('contracts') if isinstance(chain.get('contracts'), dict) else {}
         network_health = chain.get('network_health') if isinstance(chain.get('network_health'), dict) else {}
@@ -112,7 +154,7 @@ def tokens_payload() -> dict[str, Any]:
                 'chain_key': str(chain.get('chain_key', '')),
                 'name': str(chain.get('name', chain_id_key)),
                 'network': str(chain.get('network', '')),
-                'token_count': len(tokens),
+                'token_count': len(executable_tokens),
                 'pair_count': len(pairs),
                 'router_address': str(contracts.get('harmony_router', '')),
                 'factory_address': str(contracts.get('harmony_factory', '')),

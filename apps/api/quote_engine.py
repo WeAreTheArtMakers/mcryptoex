@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN
@@ -33,6 +34,97 @@ class ChainLiquidityState:
     pairs: list[PairState]
     swap_fee_bps: int
     protocol_fee_bps: int
+
+
+def _normalize_pool_address(value: str) -> str:
+    return str(value or '').strip().lower()
+
+
+def _is_evm_pool_address(value: str) -> bool:
+    return bool(re.fullmatch(r'0x[a-f0-9]{40}', _normalize_pool_address(value)))
+
+
+def _parse_canonical_pool_allowlist() -> tuple[set[str], set[tuple[int, str]]]:
+    raw = str(os.getenv('CANONICAL_POOL_ALLOWLIST', '')).strip()
+    global_allowlist: set[str] = set()
+    chain_allowlist: set[tuple[int, str]] = set()
+    if not raw:
+        return global_allowlist, chain_allowlist
+
+    for chunk in re.split(r'[,;\s]+', raw):
+        item = chunk.strip()
+        if not item:
+            continue
+        if ':' in item:
+            chain_raw, addr_raw = item.split(':', 1)
+            addr = _normalize_pool_address(addr_raw)
+            if not _is_evm_pool_address(addr):
+                continue
+            try:
+                chain_value = int(chain_raw.strip())
+            except (TypeError, ValueError):
+                continue
+            if chain_value <= 0:
+                continue
+            chain_allowlist.add((chain_value, addr))
+            continue
+
+        addr = _normalize_pool_address(item)
+        if _is_evm_pool_address(addr):
+            global_allowlist.add(addr)
+
+    return global_allowlist, chain_allowlist
+
+
+def _pair_symbol_key(token0_symbol: str, token1_symbol: str) -> tuple[str, str]:
+    token0 = str(token0_symbol or '').strip().upper()
+    token1 = str(token1_symbol or '').strip().upper()
+    if token0 <= token1:
+        return token0, token1
+    return token1, token0
+
+
+def _pair_liquidity_score(pair: PairState) -> Decimal:
+    if pair.reserve0 <= 0 or pair.reserve1 <= 0:
+        return Decimal('0')
+    return pair.reserve0 * pair.reserve1
+
+
+def _select_canonical_pairs(chain_id: int, pairs: list[PairState]) -> list[PairState]:
+    if not pairs:
+        return []
+
+    global_allowlist, chain_allowlist = _parse_canonical_pool_allowlist()
+    grouped: dict[tuple[str, str], list[PairState]] = {}
+    for pair in pairs:
+        symbol_key = _pair_symbol_key(pair.token0_symbol, pair.token1_symbol)
+        if not symbol_key[0] or not symbol_key[1]:
+            continue
+        grouped.setdefault(symbol_key, []).append(pair)
+
+    selected: list[PairState] = []
+    for group in grouped.values():
+        if not group:
+            continue
+        allowlisted_group = [
+            pair
+            for pair in group
+            if (
+                (_normalize_pool_address(pair.pair_address) in global_allowlist) or
+                ((chain_id, _normalize_pool_address(pair.pair_address)) in chain_allowlist)
+            )
+        ]
+        candidates = allowlisted_group if allowlisted_group else group
+        candidates.sort(
+            key=lambda pair: (
+                _pair_liquidity_score(pair),
+                _normalize_pool_address(pair.pair_address)
+            ),
+            reverse=True
+        )
+        selected.append(candidates[0])
+
+    return selected
 
 
 class LiquidityDepthCache:
@@ -133,12 +225,15 @@ class LiquidityDepthCache:
                     canonical.setdefault(token0.upper(), token0)
                     canonical.setdefault(token1.upper(), token1)
 
+            canonical_pairs = _select_canonical_pairs(chain_id, parsed_pairs)
+            active_pairs = canonical_pairs if canonical_pairs else parsed_pairs
+
             chains[chain_id] = ChainLiquidityState(
                 chain_id=chain_id,
                 symbols=symbols,
                 canonical_symbols=canonical,
                 token_decimals=token_decimals,
-                pairs=parsed_pairs,
+                pairs=active_pairs,
                 swap_fee_bps=swap_fee_bps,
                 protocol_fee_bps=protocol_fee_bps
             )

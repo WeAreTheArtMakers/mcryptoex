@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "generated_at": "2026-02-19T15:44:48.340477+00:00",
+  "generated_at": "2026-02-20T17:17:51.178301+00:00",
   "source": "packages/contracts/deploy/address-registry.*.json + live-rpc-pair-discovery + optional pair-seeds.*.json fallback",
   "chains": [
     {
@@ -37,8 +37,8 @@
       "network_health": {
         "rpc_connected": false,
         "latest_block": null,
-        "checked_at": "2026-02-19T15:44:48.340477+00:00",
-        "discovery_status": "error: rpc call failed via urllib and curl: <urlopen error [Errno 8] nodename nor servname provided, or not known>; curl=curl: (6) Could not resolve host: host.docker.internal"
+        "checked_at": "2026-02-20T17:17:51.178301+00:00",
+        "discovery_status": "error: rpc call failed via urllib and curl: <urlopen error [Errno 111] Connection refused>; curl=curl: (7) Failed to connect to host.docker.internal port 8545 after 5 ms: Couldn't connect to server"
       },
       "tokens": [
         {
@@ -68,13 +68,6 @@
           "address": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
           "decimals": 8,
           "source": "contracts.tokenB"
-        },
-        {
-          "symbol": "WSOL",
-          "name": "Wrapped SOL (EVM)",
-          "address": "local-wsol",
-          "decimals": 18,
-          "source": "defaults"
         }
       ],
       "trust_assumptions": [
@@ -85,7 +78,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -95,7 +88,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -105,7 +98,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -141,10 +134,10 @@
       },
       "pairs": [],
       "network_health": {
-        "rpc_connected": false,
-        "latest_block": null,
-        "checked_at": "2026-02-19T15:44:48.340477+00:00",
-        "discovery_status": "error: rpc call failed via urllib and curl: <urlopen error [Errno 8] nodename nor servname provided, or not known>; curl=curl: (6) Could not resolve host: ethereum-sepolia-rpc.publicnode.com"
+        "rpc_connected": true,
+        "latest_block": 10300819,
+        "checked_at": "2026-02-20T17:17:51.178301+00:00",
+        "discovery_status": "factory-not-configured"
       },
       "tokens": [
         {
@@ -157,21 +150,7 @@
         {
           "symbol": "WETH",
           "name": "Wrapped Ether",
-          "address": "bridge-weth-sepolia",
-          "decimals": 18,
-          "source": "defaults"
-        },
-        {
-          "symbol": "wBTC",
-          "name": "Wrapped Bitcoin (bridge)",
-          "address": "bridge-wbtc-sepolia",
-          "decimals": 8,
-          "source": "defaults"
-        },
-        {
-          "symbol": "wSOL",
-          "name": "Wrapped SOL (bridge)",
-          "address": "bridge-wsol-sepolia",
+          "address": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
           "decimals": 18,
           "source": "defaults"
         }
@@ -184,7 +163,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -194,7 +173,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -204,7 +183,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],
@@ -224,34 +203,179 @@
         "protocol_fee_bps": 5
       },
       "contracts": {
-        "musd": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
-        "stabilizer": "0x35cb76D1673C1b18bD753FE54e4246d52F61FeF1",
-        "oracle": "0x7FC73C519C6D3067398A76CdcA123a0778361be7",
-        "harmony_factory": "0x0FC747cb80Fe999e70393E187ad947F8E3b4b4b6",
-        "harmony_router": "0xb29E5Fabf83ae8503F0276F7C57559f17428bF93",
-        "resonance_vault": "0x3AB2112a675de1CDED56B02393A99054E9B1C222"
+        "musd": "0xCB35d7bAF8aB0324aDAa60aF5a9dB89fDaD35FFB",
+        "stabilizer": "0xeA9865E573247e81A6d45338FF6963d8eeAE05d4",
+        "oracle": "0x32EaB166B6308e80FBF64e3204018afF2EcB5815",
+        "harmony_factory": "0x49567eF286e3fa60528101536bD250aD44ed533D",
+        "harmony_router": "0xb832be2955C5c9A693F6637eEe8207000123AffD",
+        "resonance_vault": "0xe0B336Db63F929cA615a3C4301692F2939111066"
       },
       "indexer": {
         "pair_addresses": [
+          "0x86012f519922622ef83e30978aecc99968eb2f8e",
+          "0xd0e8af86aab45160143befa73d583ceaf3d51959",
+          "0x4b85a5b1d937543b5b457c4e935efbf663a480ec",
+          "0x6a2ddedf072841e4546ba1b6773b2348f2cc48f2",
+          "0xb75a1ed155ab5595edc9ade0737eca2c441b16c0",
+          "0xe5df82f2d7a6d2c2949370f5905c141fe1670bad",
+          "0x64937140e6751221b5ab441548f9855e89ebabf3",
+          "0x91fb191266124176abcd6f094bed0c16b244a1c7",
+          "0xb5d02b7609a9571f4e4f34014d19e03a6ec5c65e",
+          "0x9f2304fabb304f1cf66bfacfa52cd0f24b518053",
+          "0x233FFAccEcc2Cd50B122dc042f1C4fdF576bFA25",
           "0x1e416713b1d40c4d38b643ff9ca6c52f55be1c20",
-          "0x6c5c0e49005d9b49a15f8306511d0b01fad97897",
-          "0x44dc138e34fa84f90f5671eeac319e3d3d9a0dac",
-          "0x2a2b5d174e21c84216da5ee37441335048f72c1d",
-          "0x910bd9b932bfe8a389d87e2018d26f40c2caca10",
-          "0x3083a173b7091cf583cc316dcf61b425cd99e243",
-          "0xe713c91ef1cdd199199d50f24ae8eb40cec38a31",
-          "0xcc1b4b3421f1b323e085d4b37b076fa190c5e6ae"
+          "0x6c5c0e49005d9b49a15f8306511d0b01fad97897"
         ],
         "stabilizer_addresses": [
-          "0x35cb76D1673C1b18bD753FE54e4246d52F61FeF1"
+          "0xeA9865E573247e81A6d45338FF6963d8eeAE05d4"
         ],
         "vault_addresses": [
-          "0x3AB2112a675de1CDED56B02393A99054E9B1C222"
+          "0xe0B336Db63F929cA615a3C4301692F2939111066"
         ],
         "start_block": "latest",
         "confirmation_depth": 3
       },
       "pairs": [
+        {
+          "pair_address": "0x86012f519922622ef83e30978aecc99968eb2f8e",
+          "token0_address": "0xb6322ed8561604ca2a1b9c17e4d02b957eb242fe",
+          "token1_address": "0xcb35d7baf8ab0324adaa60af5a9db89fdad35ffb",
+          "token0_symbol": "MODX",
+          "token1_symbol": "mUSD",
+          "reserve0_raw": "25593675456689351837",
+          "reserve1_raw": "84954877457468702487",
+          "reserve0_decimal": "25.593675456689351837",
+          "reserve1_decimal": "84.954877457468702487",
+          "reserve_block_timestamp": 1771603705,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0xd0e8af86aab45160143befa73d583ceaf3d51959",
+          "token0_address": "0x0b21caf126ca8eda29a9de71478bbbbd2ba0fb23",
+          "token1_address": "0xcb35d7baf8ab0324adaa60af5a9db89fdad35ffb",
+          "token0_symbol": "USDC",
+          "token1_symbol": "mUSD",
+          "reserve0_raw": "1853326959350032804846",
+          "reserve1_raw": "836015967672102859817",
+          "reserve0_decimal": "1853.326959350032804846",
+          "reserve1_decimal": "836.015967672102859817",
+          "reserve_block_timestamp": 1771603708,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0x4b85a5b1d937543b5b457c4e935efbf663a480ec",
+          "token0_address": "0xcb35d7baf8ab0324adaa60af5a9db89fdad35ffb",
+          "token1_address": "0xdeef4f1041f0c5fda104bd106c872c934eef1441",
+          "token0_symbol": "mUSD",
+          "token1_symbol": "USDT",
+          "reserve0_raw": "941080415864909899380",
+          "reserve1_raw": "2113303581415410033551",
+          "reserve0_decimal": "941.08041586490989938",
+          "reserve1_decimal": "2113.303581415410033551",
+          "reserve_block_timestamp": 1771603712,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0x6a2ddedf072841e4546ba1b6773b2348f2cc48f2",
+          "token0_address": "0x03034ad42778dc9b0f85bf4c87614cb0809d3a5f",
+          "token1_address": "0xcb35d7baf8ab0324adaa60af5a9db89fdad35ffb",
+          "token0_symbol": "WAVAX",
+          "token1_symbol": "mUSD",
+          "reserve0_raw": "301021891707770488073",
+          "reserve1_raw": "300998012641850087415",
+          "reserve0_decimal": "301.021891707770488073",
+          "reserve1_decimal": "300.998012641850087415",
+          "reserve_block_timestamp": 1771602062,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0xb75a1ed155ab5595edc9ade0737eca2c441b16c0",
+          "token0_address": "0xae13d989dac2f0debff460ac112a837c89baa7cd",
+          "token1_address": "0xcb35d7baf8ab0324adaa60af5a9db89fdad35ffb",
+          "token0_symbol": "WBNB",
+          "token1_symbol": "mUSD",
+          "reserve0_raw": "632538856019782815",
+          "reserve1_raw": "237468442468991048994",
+          "reserve0_decimal": "0.632538856019782815",
+          "reserve1_decimal": "237.468442468991048994",
+          "reserve_block_timestamp": 1771603715,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0xe5df82f2d7a6d2c2949370f5905c141fe1670bad",
+          "token0_address": "0xcb35d7baf8ab0324adaa60af5a9db89fdad35ffb",
+          "token1_address": "0xd08e78c9c00da6adadeae7b8a048aa01a5805812",
+          "token0_symbol": "mUSD",
+          "token1_symbol": "WBTC",
+          "reserve0_raw": "300999994018059977661",
+          "reserve1_raw": "30100006592",
+          "reserve0_decimal": "300.999994018059977661",
+          "reserve1_decimal": "301.00006592",
+          "reserve_block_timestamp": 1771602051,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0x64937140e6751221b5ab441548f9855e89ebabf3",
+          "token0_address": "0x33ac346eae83752569b0948291c2e3880b85d0cd",
+          "token1_address": "0xcb35d7baf8ab0324adaa60af5a9db89fdad35ffb",
+          "token0_symbol": "WETH",
+          "token1_symbol": "mUSD",
+          "reserve0_raw": "301000658854726878012",
+          "reserve1_raw": "300999940185997198910",
+          "reserve0_decimal": "301.000658854726878012",
+          "reserve1_decimal": "300.99994018599719891",
+          "reserve_block_timestamp": 1771602055,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0x91fb191266124176abcd6f094bed0c16b244a1c7",
+          "token0_address": "0x7d760029e7ce7f265ac09f47f7e9591d10933464",
+          "token1_address": "0xcb35d7baf8ab0324adaa60af5a9db89fdad35ffb",
+          "token0_symbol": "WSOL",
+          "token1_symbol": "mUSD",
+          "reserve0_raw": "301015339344",
+          "reserve1_raw": "300998607457788283484",
+          "reserve0_decimal": "301.015339344",
+          "reserve1_decimal": "300.998607457788283484",
+          "reserve_block_timestamp": 1771602059,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0xb5d02b7609a9571f4e4f34014d19e03a6ec5c65e",
+          "token0_address": "0x0b21caf126ca8eda29a9de71478bbbbd2ba0fb23",
+          "token1_address": "0xdeef4f1041f0c5fda104bd106c872c934eef1441",
+          "token0_symbol": "USDC",
+          "token1_symbol": "USDT",
+          "reserve0_raw": "1000000000000000000000",
+          "reserve1_raw": "10000000000000000000000",
+          "reserve0_decimal": "1000",
+          "reserve1_decimal": "10000",
+          "reserve_block_timestamp": 1771584191,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0x9f2304fabb304f1cf66bfacfa52cd0f24b518053",
+          "token0_address": "0xd08e78c9c00da6adadeae7b8a048aa01a5805812",
+          "token1_address": "0xdeef4f1041f0c5fda104bd106c872c934eef1441",
+          "token0_symbol": "WBTC",
+          "token1_symbol": "USDT",
+          "reserve0_raw": "100000000",
+          "reserve1_raw": "70000000000000000000000",
+          "reserve0_decimal": "1",
+          "reserve1_decimal": "70000",
+          "reserve_block_timestamp": 1771590652,
+          "checked_at": "2026-02-20T16:08:34.524989+00:00"
+        },
+        {
+          "pair_address": "0x233FFAccEcc2Cd50B122dc042f1C4fdF576bFA25",
+          "token0_address": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
+          "token1_address": "0x64544969ed7EBf5f083679233325356EbE738930",
+          "token0_symbol": "mUSD",
+          "token1_symbol": "USDC",
+          "reserve0_decimal": "0.2",
+          "reserve1_decimal": "0.2",
+          "checked_at": "2026-02-19T18:46:38Z"
+        },
         {
           "pair_address": "0x1e416713b1d40c4d38b643ff9ca6c52f55be1c20",
           "token0_address": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
@@ -271,136 +395,97 @@
           "reserve0_decimal": "40",
           "reserve1_decimal": "0.5",
           "checked_at": "2026-02-19T14:16:15Z"
-        },
-        {
-          "pair_address": "0x44dc138e34fa84f90f5671eeac319e3d3d9a0dac",
-          "token0_address": "",
-          "token1_address": "",
-          "token0_symbol": "mUSD",
-          "token1_symbol": "WBTC",
-          "reserve0_decimal": "80",
-          "reserve1_decimal": "0.1",
-          "checked_at": "2026-02-19T14:16:15Z"
-        },
-        {
-          "pair_address": "0x2a2b5d174e21c84216da5ee37441335048f72c1d",
-          "token0_address": "",
-          "token1_address": "",
-          "token0_symbol": "mUSD",
-          "token1_symbol": "WETH",
-          "reserve0_decimal": "80",
-          "reserve1_decimal": "1",
-          "checked_at": "2026-02-19T14:16:15Z"
-        },
-        {
-          "pair_address": "0x910bd9b932bfe8a389d87e2018d26f40c2caca10",
-          "token0_address": "",
-          "token1_address": "",
-          "token0_symbol": "mUSD",
-          "token1_symbol": "WBTC",
-          "reserve0_decimal": "40",
-          "reserve1_decimal": "0.05",
-          "checked_at": "2026-02-19T14:16:15Z"
-        },
-        {
-          "pair_address": "0x3083a173b7091cf583cc316dcf61b425cd99e243",
-          "token0_address": "",
-          "token1_address": "",
-          "token0_symbol": "mUSD",
-          "token1_symbol": "WETH",
-          "reserve0_decimal": "40",
-          "reserve1_decimal": "0.5",
-          "checked_at": "2026-02-19T14:16:15Z"
-        },
-        {
-          "pair_address": "0xe713c91ef1cdd199199d50f24ae8eb40cec38a31",
-          "token0_address": "",
-          "token1_address": "",
-          "token0_symbol": "mUSD",
-          "token1_symbol": "WSOL",
-          "reserve0_decimal": "80",
-          "reserve1_decimal": "16",
-          "checked_at": "2026-02-19T14:16:15Z"
-        },
-        {
-          "pair_address": "0xcc1b4b3421f1b323e085d4b37b076fa190c5e6ae",
-          "token0_address": "",
-          "token1_address": "",
-          "token0_symbol": "mUSD",
-          "token1_symbol": "WAVAX",
-          "reserve0_decimal": "80",
-          "reserve1_decimal": "10",
-          "checked_at": "2026-02-19T14:16:15Z"
         }
       ],
       "network_health": {
         "rpc_connected": false,
         "latest_block": null,
-        "checked_at": "2026-02-19T15:44:48.340477+00:00",
-        "discovery_status": "fallback-seed: rpc call failed via urllib and curl: <urlopen error [Errno 8] nodename nor servname provided, or not known>; curl=curl: (6) Could not resolve host: bsc-testnet-rpc.publicnode.com",
-        "fallback_pair_count": 8
+        "checked_at": "2026-02-20T17:17:51.178301+00:00",
+        "discovery_status": "fallback-previous+seed+targets: rpc call failed via urllib and curl: HTTP Error 403: Forbidden; curl=curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to bsc-testnet-rpc.publicnode.com:443",
+        "fallback_pair_count": 13
       },
       "tokens": [
         {
           "symbol": "mUSD",
           "name": "Musical USD",
-          "address": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
+          "address": "0xCB35d7bAF8aB0324aDAa60aF5a9dB89fDaD35FFB",
           "decimals": 18,
           "source": "contracts.musd"
         },
         {
           "symbol": "WBNB",
           "name": "Wrapped BNB",
-          "address": "bridge-wbnb-bsc",
+          "address": "0xae13d989dac2f0debff460ac112a837c89baa7cd",
           "decimals": 18,
           "source": "defaults"
         },
         {
-          "symbol": "wBTC",
-          "name": "Wrapped Bitcoin (bridge)",
-          "address": "bridge-wbtc-bsc",
+          "symbol": "MODX",
+          "name": "modX Token",
+          "address": "0xB6322eD8561604Ca2A1b9c17e4d02B957EB242fe",
           "decimals": 18,
-          "source": "defaults"
-        },
-        {
-          "symbol": "wSOL",
-          "name": "Wrapped SOL (bridge)",
-          "address": "bridge-wsol-bsc",
-          "decimals": 18,
-          "source": "defaults"
+          "source": "static"
         },
         {
           "symbol": "USDC",
           "name": "USDC collateral",
-          "address": "0x64544969ed7EBf5f083679233325356EbE738930",
+          "address": "0x0b21caf126cA8eda29a9de71478bbBBd2BA0fB23",
           "decimals": 18,
           "source": "deployed.collaterals"
         },
         {
           "symbol": "USDT",
           "name": "USDT collateral",
-          "address": "0x66E972502A34A625828C544a1914E8D8cc2A9dE5",
+          "address": "0xdeEf4f1041F0C5FdA104BD106c872C934EEf1441",
           "decimals": 18,
           "source": "deployed.collaterals"
         },
         {
-          "symbol": "WBNB",
-          "name": "Wrapped BNB",
-          "address": "0xae13d989dac2f0debff460ac112a837c89baa7cd",
+          "symbol": "WAVAX",
+          "name": "WAVAX target",
+          "address": "0x03034ad42778dc9b0f85bf4c87614cb0809d3a5f",
           "decimals": 18,
-          "source": "seed"
+          "source": "deployed.targets"
+        },
+        {
+          "symbol": "WBTC",
+          "name": "WBTC target",
+          "address": "0xd08e78c9c00da6adadeae7b8a048aa01a5805812",
+          "decimals": 8,
+          "source": "deployed.targets"
         },
         {
           "symbol": "WETH",
-          "name": "Wrapped ETH (seed)",
-          "address": "seed-weth-bsc",
+          "name": "WETH target",
+          "address": "0x33ac346eae83752569b0948291c2e3880b85d0cd",
+          "decimals": 18,
+          "source": "deployed.targets"
+        },
+        {
+          "symbol": "WSOL",
+          "name": "WSOL target",
+          "address": "0x7d760029e7ce7f265ac09f47f7e9591d10933464",
+          "decimals": 9,
+          "source": "deployed.targets"
+        },
+        {
+          "symbol": "mUSD",
+          "name": "Musical USD",
+          "address": "0x5d05B53BB0862C6D11B8c2f6B3465B3Ffc9A8733",
           "decimals": 18,
           "source": "seed"
         },
         {
-          "symbol": "WAVAX",
-          "name": "Wrapped AVAX (seed)",
-          "address": "seed-wavax-bsc",
+          "symbol": "USDC",
+          "name": "USD Coin",
+          "address": "0x64544969ed7EBf5f083679233325356EbE738930",
+          "decimals": 18,
+          "source": "seed"
+        },
+        {
+          "symbol": "USDT",
+          "name": "USD Tether",
+          "address": "0x66E972502A34A625828C544a1914E8D8cc2A9dE5",
           "decimals": 18,
           "source": "seed"
         }
@@ -413,7 +498,7 @@
           "risk_level": "medium",
           "bridge_provider": "mCryptoEx governance + oracle section",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Depends on Stabilizer collateral policy, oracle integrity, and governance controls."
         },
         {
@@ -423,7 +508,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Bridge/custodian solvency and redeemability are external trust dependencies."
         },
         {
@@ -433,7 +518,7 @@
           "risk_level": "high",
           "bridge_provider": "provider-not-declared",
           "last_attested_at": null,
-          "last_checked_at": "2026-02-19T15:44:48.340477+00:00",
+          "last_checked_at": "2026-02-20T17:17:51.178301+00:00",
           "statement": "Wrapped SOL representation depends on bridge contract and message relayer security."
         }
       ],

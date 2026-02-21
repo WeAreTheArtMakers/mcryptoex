@@ -16,6 +16,9 @@ import {
 } from 'recharts';
 
 const API_BASE = process.env.NEXT_PUBLIC_TEMPO_API_BASE || 'http://localhost:8500';
+const FETCH_ATTEMPTS = Math.max(1, Number(process.env.NEXT_PUBLIC_ANALYTICS_FETCH_ATTEMPTS || '4'));
+const FETCH_BASE_DELAY_MS = Math.max(150, Number(process.env.NEXT_PUBLIC_ANALYTICS_RETRY_BASE_MS || '500'));
+const FETCH_MAX_DELAY_MS = Math.max(FETCH_BASE_DELAY_MS, Number(process.env.NEXT_PUBLIC_ANALYTICS_RETRY_MAX_MS || '6000'));
 
 type AnalyticsPayload = {
   minutes: number;
@@ -73,13 +76,66 @@ type PoolSnapshotPoint = {
   swaps: number;
 };
 
+type RetryState = {
+  active: boolean;
+  target: string;
+  attempt: number;
+  attempts: number;
+  nextRetryAt: number;
+  reason: string;
+};
+
 function n(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(
+  url: string,
+  target: string,
+  onRetry: (state: RetryState) => void
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) return res;
+      const retriable = res.status === 408 || res.status === 425 || res.status === 429 || res.status >= 500;
+      if (!retriable || attempt === FETCH_ATTEMPTS) {
+        throw new Error(`${target} endpoint unavailable (${res.status})`);
+      }
+      throw new Error(`${target} endpoint temporary failure (${res.status})`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('request failed');
+      if (attempt >= FETCH_ATTEMPTS) break;
+      const backoff = Math.min(FETCH_MAX_DELAY_MS, Math.round(FETCH_BASE_DELAY_MS * 2 ** (attempt - 1)));
+      const jitter = Math.floor(Math.random() * Math.max(60, Math.round(backoff * 0.25)));
+      const delayMs = backoff + jitter;
+      onRetry({
+        active: true,
+        target,
+        attempt,
+        attempts: FETCH_ATTEMPTS,
+        nextRetryAt: Date.now() + delayMs,
+        reason: lastError.message
+      });
+      await sleep(delayMs);
+    }
+  }
+  throw lastError || new Error(`${target} request failed`);
+}
+
 function sumDecimal(rows: Array<Record<string, string | number>>, field: string): number {
   return rows.reduce((sum, row) => sum + n(row[field]), 0);
+}
+
+function formatMetric(value: number | null, digits: number): string {
+  if (value === null || !Number.isFinite(value)) return 'n/a';
+  return value.toFixed(digits);
 }
 
 export default function AnalyticsPage() {
@@ -94,30 +150,46 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastUpdateAt, setLastUpdateAt] = useState<Date | null>(null);
+  const [retryState, setRetryState] = useState<RetryState>({
+    active: false,
+    target: '',
+    attempt: 0,
+    attempts: FETCH_ATTEMPTS,
+    nextRetryAt: 0,
+    reason: ''
+  });
+  const [isStale, setIsStale] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let active = true;
+    let timer: number | undefined;
 
     async function load() {
       try {
         setLoading(true);
+        setRetryState((current) => ({ ...current, active: false, reason: '' }));
 
         const pairsPath = chainFilter === 0 ? '/pairs?limit=120' : `/pairs?chain_id=${chainFilter}&limit=120`;
         const [analyticsRes, tokensRes, pairsRes] = await Promise.all([
-          fetch(`${API_BASE}/analytics?minutes=${minutes}`, { cache: 'no-store' }),
-          fetch(`${API_BASE}/tokens`, { cache: 'no-store' }),
-          fetch(`${API_BASE}${pairsPath}`, { cache: 'no-store' })
+          fetchWithRetry(`${API_BASE}/analytics?minutes=${minutes}`, 'analytics', (state) => {
+            if (!active) return;
+            setRetryState(state);
+          }),
+          fetchWithRetry(`${API_BASE}/tokens`, 'tokens', (state) => {
+            if (!active) return;
+            setRetryState(state);
+          }),
+          fetchWithRetry(`${API_BASE}${pairsPath}`, 'pairs', (state) => {
+            if (!active) return;
+            setRetryState(state);
+          })
         ]);
-
-        if (!analyticsRes.ok) {
-          throw new Error(`analytics endpoint unavailable (${analyticsRes.status})`);
-        }
-        if (!tokensRes.ok) {
-          throw new Error(`token registry unavailable (${tokensRes.status})`);
-        }
-        if (!pairsRes.ok) {
-          throw new Error(`pairs endpoint unavailable (${pairsRes.status})`);
-        }
 
         const body = (await analyticsRes.json()) as AnalyticsPayload;
         const tokenBody = (await tokensRes.json()) as TokensPayload;
@@ -130,21 +202,24 @@ export default function AnalyticsPage() {
         if (tokenBody.networks?.length) setNetworks(tokenBody.networks);
         setLastUpdateAt(new Date());
         setError('');
+        setIsStale(false);
+        setRetryState((current) => ({ ...current, active: false, reason: '' }));
       } catch (loadError) {
         if (!active) return;
-        setPayload(null);
-        setPairRows([]);
         setError(loadError instanceof Error ? loadError.message : 'failed to load analytics');
+        setIsStale(true);
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setLoading(false);
+          timer = window.setTimeout(load, 12_000);
+        }
       }
     }
 
-    load();
-    const timer = setInterval(load, 12_000);
+    void load();
     return () => {
       active = false;
-      clearInterval(timer);
+      if (timer) window.clearTimeout(timer);
     };
   }, [minutes, chainFilter]);
 
@@ -279,16 +354,18 @@ export default function AnalyticsPage() {
 
   const summary = useMemo(() => {
     return {
-      totalVolume: sumDecimal(filtered.volumeRows, 'volume'),
-      totalFeeRevenue: sumDecimal(filtered.feeRows, 'revenue_usd'),
-      avgGas: filtered.gasRows.length ? sumDecimal(filtered.gasRows, 'avg_gas_cost_usd') / filtered.gasRows.length : 0,
-      revenueMusd: sumDecimal(filtered.revenueRows, 'revenue_musd'),
+      totalVolume: filtered.volumeRows.length ? sumDecimal(filtered.volumeRows, 'volume') : null,
+      totalFeeRevenue: filtered.feeRows.length ? sumDecimal(filtered.feeRows, 'revenue_usd') : null,
+      avgGas: filtered.gasRows.length ? sumDecimal(filtered.gasRows, 'avg_gas_cost_usd') / filtered.gasRows.length : null,
+      revenueMusd: filtered.revenueRows.length ? sumDecimal(filtered.revenueRows, 'revenue_musd') : null,
       avgSlippageBps: filtered.slippageRows.length
         ? sumDecimal(filtered.slippageRows, 'slippage_bps') / filtered.slippageRows.length
-        : 0,
-      poolLiquidity: poolSnapshot.reduce((sum, row) => sum + row.liquidity, 0)
+        : null,
+      poolLiquidity: poolSnapshot.length ? poolSnapshot.reduce((sum, row) => sum + row.liquidity, 0) : null
     };
   }, [filtered, poolSnapshot]);
+
+  const retryDelayMs = Math.max(0, retryState.nextRetryAt - nowMs);
 
   return (
     <section className="space-y-4 rounded-3xl border border-slateblue/70 bg-gradient-to-br from-[#101a34]/95 via-[#122744]/90 to-[#1a2f4d]/80 p-6">
@@ -333,33 +410,54 @@ export default function AnalyticsPage() {
 
       {loading ? <p className="text-sm text-slate-300">Loading analytics...</p> : null}
       {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+      {retryState.active ? (
+        <p className="text-xs text-amber-300">
+          Retry/backoff: {retryState.target} attempt {retryState.attempt}/{retryState.attempts} in{' '}
+          {(retryDelayMs / 1000).toFixed(1)}s ({retryState.reason})
+        </p>
+      ) : null}
+      {isStale ? (
+        <p className="text-xs text-amber-200">Showing last known metrics snapshot while the API reconnects.</p>
+      ) : null}
 
-      {!loading && !error ? (
+      {!loading ? (
         <>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Total Volume</p>
-              <p className="mt-1 font-mono text-lg">{summary.totalVolume.toFixed(4)}</p>
+              <p className={`mt-1 font-mono text-lg ${summary.totalVolume === null ? 'text-slate-500' : ''}`}>
+                {formatMetric(summary.totalVolume, 4)}
+              </p>
             </div>
             <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Fee Revenue (USD)</p>
-              <p className="mt-1 font-mono text-lg">{summary.totalFeeRevenue.toFixed(4)}</p>
+              <p className={`mt-1 font-mono text-lg ${summary.totalFeeRevenue === null ? 'text-slate-500' : ''}`}>
+                {formatMetric(summary.totalFeeRevenue, 4)}
+              </p>
             </div>
             <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Avg Gas (USD)</p>
-              <p className="mt-1 font-mono text-lg">{summary.avgGas.toFixed(4)}</p>
+              <p className={`mt-1 font-mono text-lg ${summary.avgGas === null ? 'text-slate-500' : ''}`}>
+                {formatMetric(summary.avgGas, 4)}
+              </p>
             </div>
             <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Revenue (mUSD)</p>
-              <p className="mt-1 font-mono text-lg">{summary.revenueMusd.toFixed(4)}</p>
+              <p className={`mt-1 font-mono text-lg ${summary.revenueMusd === null ? 'text-slate-500' : ''}`}>
+                {formatMetric(summary.revenueMusd, 4)}
+              </p>
             </div>
             <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Conv. Slippage (bps)</p>
-              <p className="mt-1 font-mono text-lg">{summary.avgSlippageBps.toFixed(2)}</p>
+              <p className={`mt-1 font-mono text-lg ${summary.avgSlippageBps === null ? 'text-slate-500' : ''}`}>
+                {formatMetric(summary.avgSlippageBps, 2)}
+              </p>
             </div>
             <div className="rounded-xl border border-slateblue/50 bg-slate-950/60 p-3">
               <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Pool Liquidity (snapshot)</p>
-              <p className="mt-1 font-mono text-lg">{summary.poolLiquidity.toFixed(4)}</p>
+              <p className={`mt-1 font-mono text-lg ${summary.poolLiquidity === null ? 'text-slate-500' : ''}`}>
+                {formatMetric(summary.poolLiquidity, 4)}
+              </p>
             </div>
           </div>
 

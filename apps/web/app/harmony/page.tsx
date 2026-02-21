@@ -236,7 +236,12 @@ export default function HarmonyPage() {
   const publicClient = usePublicClient({ chainId });
   const { data: walletClient } = useWalletClient({ chainId });
 
-  const chainTokens = useMemo(() => tokensByChain[String(chainId)] || DEFAULT_TOKENS, [tokensByChain, chainId]);
+  const chainTokens = useMemo(() => {
+    const configured = tokensByChain[String(chainId)] || [];
+    const evmOnly = configured.filter((token) => isAddress(token.address));
+    if (evmOnly.length) return evmOnly;
+    return (DEFAULT_TOKENS || []).filter((token) => isAddress(token.address));
+  }, [tokensByChain, chainId]);
   const networkOptions = useMemo(() => (networks.length ? networks : DEFAULT_NETWORKS), [networks]);
   const selectedNetwork = useMemo(
     () => networkOptions.find((network) => network.chain_id === chainId),
